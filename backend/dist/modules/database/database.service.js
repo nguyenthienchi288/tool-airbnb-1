@@ -1,0 +1,679 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DatabaseService = void 0;
+const common_1 = require("@nestjs/common");
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+const helpers_1 = require("../../common/helpers");
+const app_config_service_1 = require("../../config/app-config.service");
+let DatabaseService = class DatabaseService {
+    appConfig;
+    db;
+    constructor(appConfig) {
+        this.appConfig = appConfig;
+    }
+    onModuleInit() {
+        this.ensureOpen();
+    }
+    onModuleDestroy() {
+        this.close();
+    }
+    ensureOpen() {
+        if (this.db)
+            return;
+        const dbPath = this.appConfig.dbPath;
+        const dir = path.dirname(dbPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        try {
+            const { DatabaseSync } = require('node:sqlite');
+            this.db = new DatabaseSync(dbPath);
+            this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+        }
+        catch {
+            const BetterSqlite3 = require('better-sqlite3');
+            this.db = new BetterSqlite3(dbPath);
+            this.db.pragma('journal_mode = WAL');
+            this.db.pragma('busy_timeout = 5000');
+        }
+        this.initSchema();
+    }
+    addColumnIfMissing(table, column, definition) {
+        const cols = this.db.prepare(`PRAGMA table_info(${table})`).all();
+        if (!cols.some((c) => c.name === column)) {
+            this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+        }
+    }
+    initSchema() {
+        this.db.exec(`
+      CREATE TABLE IF NOT EXISTS listings (
+        listing_id TEXT PRIMARY KEY,
+        location_query TEXT DEFAULT '',
+        check_in TEXT DEFAULT '',
+        check_out TEXT DEFAULT '',
+        nights INTEGER DEFAULT 1,
+        title TEXT DEFAULT '',
+        url TEXT DEFAULT '',
+        room_type TEXT DEFAULT '',
+        max_guests INTEGER DEFAULT 0,
+        bedrooms INTEGER DEFAULT 0,
+        beds INTEGER DEFAULT 0,
+        bathrooms REAL DEFAULT 0,
+        guests_text TEXT DEFAULT '',
+        bedrooms_text TEXT DEFAULT '',
+        beds_text TEXT DEFAULT '',
+        bathrooms_text TEXT DEFAULT '',
+        description TEXT DEFAULT '',
+        price_per_night INTEGER DEFAULT 0,
+        total_price INTEGER DEFAULT 0,
+        price_raw TEXT DEFAULT '',
+        total_price_raw TEXT DEFAULT '',
+        currency TEXT DEFAULT 'USD',
+        images_count INTEGER DEFAULT 0,
+        lat REAL,
+        lng REAL,
+        amenities_json TEXT DEFAULT '[]',
+        host_id TEXT DEFAULT '',
+        host_name TEXT DEFAULT '',
+        host_url TEXT DEFAULT '',
+        pdp_scraped INTEGER DEFAULT 1,
+        scraped_at TEXT DEFAULT ''
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_listings_loc ON listings(location_query);
+      CREATE INDEX IF NOT EXISTS idx_listings_host ON listings(host_id);
+
+      CREATE TABLE IF NOT EXISTS host_listings (
+        host_id TEXT NOT NULL,
+        listing_id TEXT NOT NULL,
+        host_name TEXT DEFAULT '',
+        location_query TEXT DEFAULT '',
+        title TEXT DEFAULT '',
+        url TEXT DEFAULT '',
+        property_type TEXT DEFAULT '',
+        guests_text TEXT DEFAULT '',
+        bedrooms_text TEXT DEFAULT '',
+        beds_text TEXT DEFAULT '',
+        bathrooms_text TEXT DEFAULT '',
+        guests INTEGER DEFAULT 0,
+        bedrooms INTEGER DEFAULT 0,
+        beds INTEGER DEFAULT 0,
+        bathrooms REAL DEFAULT 0,
+        description TEXT DEFAULT '',
+        price_per_night INTEGER DEFAULT 0,
+        total_price INTEGER DEFAULT 0,
+        price_raw TEXT DEFAULT '',
+        total_price_raw TEXT DEFAULT '',
+        currency TEXT DEFAULT 'USD',
+        images_count INTEGER DEFAULT 0,
+        lat REAL,
+        lng REAL,
+        amenities_json TEXT DEFAULT '[]',
+        host_url TEXT DEFAULT '',
+        scraped_at TEXT DEFAULT '',
+        PRIMARY KEY (host_id, listing_id)
+      );
+    `);
+        this.addColumnIfMissing('listings', 'guests_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'bedrooms_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'beds_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'bathrooms_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'description', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'price_raw', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'total_price_raw', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'images_count', 'INTEGER DEFAULT 0');
+        this.addColumnIfMissing('listings', 'rating', 'REAL DEFAULT 0');
+        this.addColumnIfMissing('listings', 'reviews_count', 'INTEGER DEFAULT 0');
+        this.addColumnIfMissing('listings', 'location_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'building_name', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('listings', 'is_high_rise', 'INTEGER DEFAULT 0');
+        this.addColumnIfMissing('listings', 'collection_status', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'location_query', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'guests_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'bedrooms_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'beds_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'bathrooms_text', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'guests', 'INTEGER DEFAULT 0');
+        this.addColumnIfMissing('host_listings', 'description', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'total_price', 'INTEGER DEFAULT 0');
+        this.addColumnIfMissing('host_listings', 'price_raw', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'total_price_raw', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'images_count', 'INTEGER DEFAULT 0');
+        this.addColumnIfMissing('host_listings', 'lat', 'REAL');
+        this.addColumnIfMissing('host_listings', 'lng', 'REAL');
+        this.addColumnIfMissing('host_listings', 'amenities_json', "TEXT DEFAULT '[]'");
+        this.addColumnIfMissing('host_listings', 'host_url', "TEXT DEFAULT ''");
+        this.addColumnIfMissing('host_listings', 'is_in_target', 'INTEGER DEFAULT 1');
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_host_listings_loc ON host_listings(location_query);`);
+        this.db.exec(`
+      CREATE TABLE IF NOT EXISTS building_clusters (
+        cluster_id TEXT PRIMARY KEY,
+        city_name TEXT DEFAULT '',
+        listing_ids_json TEXT DEFAULT '[]',
+        center_lat REAL,
+        center_lng REAL,
+        building_name TEXT DEFAULT '',
+        address_note TEXT DEFAULT '',
+        updated_at TEXT DEFAULT ''
+      );
+
+      CREATE TABLE IF NOT EXISTS geo_building_cache (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        center_lat REAL NOT NULL,
+        center_lng REAL NOT NULL,
+        building_name TEXT NOT NULL,
+        address_note TEXT DEFAULT '',
+        updated_at TEXT DEFAULT ''
+      );
+    `);
+    }
+    close() {
+        if (this.db) {
+            try {
+                this.db.close();
+            }
+            catch {
+            }
+            this.db = null;
+        }
+    }
+    getAllRoomIds() {
+        this.ensureOpen();
+        const rows = this.db.prepare(`SELECT listing_id FROM listings`).all();
+        return new Set(rows.map((r) => String(r.listing_id)));
+    }
+    getCompletedRoomIds() {
+        this.ensureOpen();
+        const rows = this.db
+            .prepare(`
+        SELECT listing_id
+        FROM listings
+        WHERE pdp_scraped = 1
+          AND amenities_json IS NOT NULL
+          AND amenities_json != '[]'
+          AND length(host_name) > 1
+        `)
+            .all();
+        return new Set(rows.map((r) => String(r.listing_id)));
+    }
+    upsertRoom(room) {
+        this.ensureOpen();
+        const validHostName = room.host_name && room.host_name.trim().length > 1 ? room.host_name.trim() : '';
+        const safeTitle = (0, helpers_1.isInvalidBlockedTitle)(room.title) ? '' : room.title.trim();
+        let resolvedBuildingName = (room.building_name || '').trim();
+        let resolvedHighRise = room.is_high_rise ? 1 : 0;
+        if (!resolvedBuildingName && room.lat !== null && room.lng !== null && room.lat !== 0 && room.lng !== 0) {
+            const cached = this.findCachedBuildingByCoords(room.lat, room.lng, 50);
+            if (cached) {
+                resolvedBuildingName = cached.building_name;
+                resolvedHighRise = 1;
+            }
+        }
+        const pdpScrapedFlag = room.pdp_scraped === 0 ? 0 : 1;
+        const statusText = room.collection_status ||
+            (pdpScrapedFlag === 1 ? 'Mới thu thập' : 'Chưa đọc PDP (Dừng sớm)');
+        const now = new Date().toISOString();
+        this.db
+            .prepare(`
+        INSERT INTO listings (
+          listing_id, location_query, check_in, check_out, nights, title, url, room_type,
+          max_guests, bedrooms, beds, bathrooms, guests_text, bedrooms_text, beds_text, bathrooms_text,
+          description, price_per_night, total_price, price_raw, total_price_raw, currency,
+          rating, reviews_count, location_text, building_name, is_high_rise, collection_status,
+          images_count, lat, lng, amenities_json, host_id, host_name, host_url, pdp_scraped, scraped_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(listing_id) DO UPDATE SET
+          location_query = CASE WHEN excluded.location_query != '' THEN excluded.location_query ELSE listings.location_query END,
+          check_in = CASE WHEN excluded.check_in != '' THEN excluded.check_in ELSE listings.check_in END,
+          check_out = CASE WHEN excluded.check_out != '' THEN excluded.check_out ELSE listings.check_out END,
+          nights = CASE WHEN excluded.nights > 0 THEN excluded.nights ELSE listings.nights END,
+          title = CASE WHEN excluded.title != '' THEN excluded.title ELSE listings.title END,
+          url = CASE WHEN excluded.url != '' THEN excluded.url ELSE listings.url END,
+          room_type = CASE WHEN excluded.room_type != '' THEN excluded.room_type ELSE listings.room_type END,
+          max_guests = CASE WHEN excluded.max_guests > 0 THEN excluded.max_guests ELSE listings.max_guests END,
+          bedrooms = CASE WHEN excluded.bedrooms > 0 THEN excluded.bedrooms ELSE listings.bedrooms END,
+          beds = CASE WHEN excluded.beds > 0 THEN excluded.beds ELSE listings.beds END,
+          bathrooms = CASE WHEN excluded.bathrooms > 0 THEN excluded.bathrooms ELSE listings.bathrooms END,
+          guests_text = CASE WHEN excluded.guests_text != '' THEN excluded.guests_text ELSE listings.guests_text END,
+          bedrooms_text = CASE WHEN excluded.bedrooms_text != '' THEN excluded.bedrooms_text ELSE listings.bedrooms_text END,
+          beds_text = CASE WHEN excluded.beds_text != '' THEN excluded.beds_text ELSE listings.beds_text END,
+          bathrooms_text = CASE WHEN excluded.bathrooms_text != '' THEN excluded.bathrooms_text ELSE listings.bathrooms_text END,
+          description = CASE WHEN excluded.description != '' THEN excluded.description ELSE listings.description END,
+          price_per_night = CASE WHEN excluded.price_per_night > 0 THEN excluded.price_per_night ELSE listings.price_per_night END,
+          total_price = CASE WHEN excluded.total_price > 0 THEN excluded.total_price ELSE listings.total_price END,
+          price_raw = CASE WHEN excluded.price_raw != '' THEN excluded.price_raw ELSE listings.price_raw END,
+          total_price_raw = CASE WHEN excluded.total_price_raw != '' THEN excluded.total_price_raw ELSE listings.total_price_raw END,
+          currency = CASE WHEN excluded.currency != '' THEN excluded.currency ELSE listings.currency END,
+          rating = CASE WHEN excluded.rating > 0 THEN excluded.rating ELSE listings.rating END,
+          reviews_count = CASE WHEN excluded.reviews_count > 0 THEN excluded.reviews_count ELSE listings.reviews_count END,
+          location_text = CASE WHEN excluded.location_text != '' THEN excluded.location_text ELSE listings.location_text END,
+          building_name = CASE WHEN excluded.building_name != '' THEN excluded.building_name ELSE listings.building_name END,
+          is_high_rise = MAX(COALESCE(listings.is_high_rise, 0), excluded.is_high_rise),
+          collection_status = CASE WHEN excluded.pdp_scraped = 1 THEN excluded.collection_status WHEN listings.pdp_scraped = 1 THEN 'Dữ liệu có sẵn' ELSE excluded.collection_status END,
+          images_count = CASE WHEN excluded.images_count > 0 THEN excluded.images_count ELSE listings.images_count END,
+          lat = COALESCE(excluded.lat, listings.lat),
+          lng = COALESCE(excluded.lng, listings.lng),
+          amenities_json = CASE WHEN excluded.amenities_json != '[]' THEN excluded.amenities_json ELSE listings.amenities_json END,
+          host_id = CASE WHEN excluded.host_id != '' THEN excluded.host_id ELSE listings.host_id END,
+          host_name = CASE WHEN length(excluded.host_name) > 1 THEN excluded.host_name ELSE listings.host_name END,
+          host_url = CASE WHEN excluded.host_url != '' THEN excluded.host_url ELSE listings.host_url END,
+          pdp_scraped = MAX(listings.pdp_scraped, excluded.pdp_scraped),
+          scraped_at = excluded.scraped_at
+        `)
+            .run(room.listing_id, room.location_query, room.checkin, room.checkout, room.nights, safeTitle, room.url, room.subtitle, room.guests, room.bedrooms, room.beds, room.bathrooms, room.guests_text, room.bedrooms_text, room.beds_text, room.bathrooms_text, room.description, Math.round(room.price_per_night || 0), Math.round(room.total_price || 0), room.price_raw, room.total_price_raw, room.currency, Number(room.rating || 0), Math.round(Number(room.reviews_count || 0)), room.location_text || '', resolvedBuildingName, resolvedHighRise, statusText, room.images_count, room.lat, room.lng, JSON.stringify(room.amenities || []), room.host_id, validHostName, room.host_url, pdpScrapedFlag, now);
+    }
+    upsertHostRoom(room) {
+        this.ensureOpen();
+        const validHostName = room.owner_host_name && room.owner_host_name.trim().length > 1
+            ? room.owner_host_name.trim()
+            : room.host_name && room.host_name.trim().length > 1
+                ? room.host_name.trim()
+                : '';
+        const safeTitle = (0, helpers_1.isInvalidBlockedTitle)(room.title) ? '' : room.title.trim();
+        const now = new Date().toISOString();
+        this.db
+            .prepare(`
+        INSERT INTO host_listings (
+          host_id, listing_id, host_name, location_query, title, url, property_type,
+          guests_text, bedrooms_text, beds_text, bathrooms_text, guests, bedrooms, beds, bathrooms,
+          description, price_per_night, total_price, price_raw, total_price_raw, currency,
+          images_count, lat, lng, amenities_json, host_url, is_in_target, scraped_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(host_id, listing_id) DO UPDATE SET
+          host_name = CASE WHEN length(excluded.host_name) > 1 THEN excluded.host_name ELSE host_listings.host_name END,
+          location_query = CASE WHEN excluded.location_query != '' THEN excluded.location_query ELSE host_listings.location_query END,
+          title = CASE WHEN excluded.title != '' THEN excluded.title ELSE host_listings.title END,
+          url = CASE WHEN excluded.url != '' THEN excluded.url ELSE host_listings.url END,
+          property_type = CASE WHEN excluded.property_type != '' THEN excluded.property_type ELSE host_listings.property_type END,
+          guests_text = CASE WHEN excluded.guests_text != '' THEN excluded.guests_text ELSE host_listings.guests_text END,
+          bedrooms_text = CASE WHEN excluded.bedrooms_text != '' THEN excluded.bedrooms_text ELSE host_listings.bedrooms_text END,
+          beds_text = CASE WHEN excluded.beds_text != '' THEN excluded.beds_text ELSE host_listings.beds_text END,
+          bathrooms_text = CASE WHEN excluded.bathrooms_text != '' THEN excluded.bathrooms_text ELSE host_listings.bathrooms_text END,
+          guests = CASE WHEN excluded.guests > 0 THEN excluded.guests ELSE host_listings.guests END,
+          bedrooms = CASE WHEN excluded.bedrooms > 0 THEN excluded.bedrooms ELSE host_listings.bedrooms END,
+          beds = CASE WHEN excluded.beds > 0 THEN excluded.beds ELSE host_listings.beds END,
+          bathrooms = CASE WHEN excluded.bathrooms > 0 THEN excluded.bathrooms ELSE host_listings.bathrooms END,
+          description = CASE WHEN excluded.description != '' THEN excluded.description ELSE host_listings.description END,
+          price_per_night = CASE WHEN excluded.price_per_night > 0 THEN excluded.price_per_night ELSE host_listings.price_per_night END,
+          total_price = CASE WHEN excluded.total_price > 0 THEN excluded.total_price ELSE host_listings.total_price END,
+          price_raw = CASE WHEN excluded.price_raw != '' THEN excluded.price_raw ELSE host_listings.price_raw END,
+          total_price_raw = CASE WHEN excluded.total_price_raw != '' THEN excluded.total_price_raw ELSE host_listings.total_price_raw END,
+          currency = CASE WHEN excluded.currency != '' THEN excluded.currency ELSE host_listings.currency END,
+          images_count = CASE WHEN excluded.images_count > 0 THEN excluded.images_count ELSE host_listings.images_count END,
+          lat = COALESCE(excluded.lat, host_listings.lat),
+          lng = COALESCE(excluded.lng, host_listings.lng),
+          amenities_json = CASE WHEN excluded.amenities_json != '[]' THEN excluded.amenities_json ELSE host_listings.amenities_json END,
+          host_url = CASE WHEN excluded.host_url != '' THEN excluded.host_url ELSE host_listings.host_url END,
+          is_in_target = excluded.is_in_target,
+          scraped_at = excluded.scraped_at
+        `)
+            .run(room.owner_host_id, room.listing_id, validHostName, room.location_query, safeTitle, room.url, room.subtitle, room.guests_text, room.bedrooms_text, room.beds_text, room.bathrooms_text, room.guests, room.bedrooms, room.beds, room.bathrooms, room.description, Math.round(room.price_per_night || 0), Math.round(room.total_price || 0), room.price_raw, room.total_price_raw, room.currency, room.images_count, room.lat, room.lng, JSON.stringify(room.amenities || []), room.host_url, room.is_in_target === 0 ? 0 : 1, now);
+    }
+    getRooms(params) {
+        this.ensureOpen();
+        const { locationQuery, search, page = 1, limit = 50 } = params;
+        const where = [];
+        const args = [];
+        if (locationQuery) {
+            where.push('LOWER(location_query) LIKE ?');
+            args.push(`%${locationQuery.toLowerCase()}%`);
+        }
+        if (search) {
+            where.push('(LOWER(title) LIKE ? OR LOWER(host_name) LIKE ? OR LOWER(room_type) LIKE ? OR LOWER(building_name) LIKE ? OR listing_id LIKE ?)');
+            const q = `%${search.toLowerCase()}%`;
+            args.push(q, q, q, q, q);
+        }
+        const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+        const countRow = this.db
+            .prepare(`SELECT COUNT(*) as total FROM listings ${whereSql}`)
+            .get(...args);
+        const offset = Math.max(0, (page - 1) * limit);
+        const items = this.db
+            .prepare(`
+        SELECT
+          listing_id, location_query, check_in, check_out, nights, title, url,
+          room_type, max_guests, bedrooms, beds, bathrooms,
+          guests_text, bedrooms_text, beds_text, bathrooms_text,
+          description, price_per_night, total_price, price_raw, total_price_raw,
+          currency, images_count, lat, lng, amenities_json,
+          building_name, is_high_rise,
+          host_id, host_name, host_url, scraped_at
+        FROM listings
+        ${whereSql}
+        ORDER BY scraped_at DESC
+        LIMIT ? OFFSET ?
+        `)
+            .all(...args, limit, offset);
+        const statsRow = this.db
+            .prepare(`
+        SELECT
+          COUNT(*) as totalRooms,
+          COUNT(DISTINCT CASE WHEN host_id != '' THEN host_id END) as uniqueHosts,
+          ROUND(AVG(CASE WHEN price_per_night > 0 THEN price_per_night END), 0) as avgPrice
+        FROM listings
+        ${whereSql}
+        `)
+            .get(...args);
+        const hostRoomsRow = this.db
+            .prepare(`SELECT COUNT(*) as totalHostRooms FROM host_listings`)
+            .get();
+        return {
+            items,
+            total: Number(countRow?.total || 0),
+            page,
+            limit,
+            stats: {
+                totalRooms: Number(statsRow?.totalRooms || 0),
+                uniqueHosts: Number(statsRow?.uniqueHosts || 0),
+                avgPrice: Number(statsRow?.avgPrice || 0),
+                totalHostRooms: Number(hostRoomsRow?.totalHostRooms || 0),
+            },
+        };
+    }
+    getRoomCountForCity(locationQuery) {
+        this.ensureOpen();
+        if (locationQuery) {
+            const row = this.db
+                .prepare(`SELECT COUNT(*) as cnt FROM listings WHERE LOWER(location_query) LIKE ?`)
+                .get(`%${locationQuery.toLowerCase()}%`);
+            return Number(row?.cnt || 0);
+        }
+        const row = this.db.prepare(`SELECT COUNT(*) as cnt FROM listings`).get();
+        return Number(row?.cnt || 0);
+    }
+    getAllRoomsForCity(locationQuery) {
+        this.ensureOpen();
+        if (locationQuery) {
+            return this.db
+                .prepare(`SELECT * FROM listings WHERE LOWER(location_query) LIKE ? ORDER BY scraped_at DESC`)
+                .all(`%${locationQuery.toLowerCase()}%`);
+        }
+        return this.db.prepare(`SELECT * FROM listings ORDER BY scraped_at DESC`).all();
+    }
+    getAllHostRoomsForCity(locationQuery) {
+        this.ensureOpen();
+        if (locationQuery) {
+            return this.db
+                .prepare(`SELECT * FROM host_listings WHERE LOWER(location_query) LIKE ? ORDER BY host_id, scraped_at DESC`)
+                .all(`%${locationQuery.toLowerCase()}%`);
+        }
+        return this.db.prepare(`SELECT * FROM host_listings ORDER BY host_id, scraped_at DESC`).all();
+    }
+    getOutOfTargetHostRooms(locationQuery) {
+        this.ensureOpen();
+        if (locationQuery) {
+            return this.db
+                .prepare(`SELECT * FROM host_listings WHERE LOWER(location_query) LIKE ? AND is_in_target = 0 ORDER BY host_id, scraped_at DESC`)
+                .all(`%${locationQuery.toLowerCase()}%`);
+        }
+        return this.db
+            .prepare(`SELECT * FROM host_listings WHERE is_in_target = 0 ORDER BY host_id, scraped_at DESC`)
+            .all();
+    }
+    getAllCitiesSummary() {
+        this.ensureOpen();
+        return this.db
+            .prepare(`
+        SELECT
+          CASE WHEN location_query != '' THEN location_query ELSE 'Khac' END as city,
+          COUNT(*) as totalRooms,
+          SUM(CASE WHEN is_high_rise = 1 THEN 1 ELSE 0 END) as highRiseRooms,
+          COUNT(DISTINCT CASE WHEN host_id != '' THEN host_id END) as uniqueHosts,
+          ROUND(AVG(CASE WHEN price_per_night > 0 THEN price_per_night END), 0) as avgPrice,
+          ROUND(AVG(CASE WHEN rating > 0 THEN rating END), 2) as avgRating
+        FROM listings
+        GROUP BY city
+        ORDER BY totalRooms DESC
+        `)
+            .all()
+            .map((r) => ({
+            city: String(r.city || ''),
+            totalRooms: Number(r.totalRooms || 0),
+            highRiseRooms: Number(r.highRiseRooms || 0),
+            uniqueHosts: Number(r.uniqueHosts || 0),
+            avgPrice: Number(r.avgPrice || 0),
+            avgRating: Number(r.avgRating || 0),
+        }));
+    }
+    getTopHostsOverall(limit = 50) {
+        this.ensureOpen();
+        return this.db
+            .prepare(`
+        SELECT
+          host_id,
+          MAX(host_name) as host_name,
+          MAX(location_query) as city,
+          COUNT(*) as rooms_count,
+          ROUND(AVG(CASE WHEN price_per_night > 0 THEN price_per_night END), 0) as avg_price
+        FROM listings
+        WHERE host_id != ''
+        GROUP BY host_id
+        ORDER BY rooms_count DESC
+        LIMIT ?
+        `)
+            .all(limit)
+            .map((r) => ({
+            host_id: String(r.host_id || ''),
+            host_name: String(r.host_name || ''),
+            city: String(r.city || ''),
+            rooms_count: Number(r.rooms_count || 0),
+            avg_price: Number(r.avg_price || 0),
+        }));
+    }
+    getRoomsWithValidCoords(cityName) {
+        this.ensureOpen();
+        if (cityName && cityName.trim()) {
+            return this.db
+                .prepare(`
+          SELECT listing_id, location_query, location_text, title, building_name, lat, lng
+          FROM listings
+          WHERE lat IS NOT NULL AND lng IS NOT NULL AND lat != 0 AND lng != 0
+            AND LOWER(location_query) LIKE ?
+          ORDER BY scraped_at DESC
+          `)
+                .all(`%${cityName.trim().toLowerCase()}%`);
+        }
+        return this.db
+            .prepare(`
+        SELECT listing_id, location_query, location_text, title, building_name, lat, lng
+        FROM listings
+        WHERE lat IS NOT NULL AND lng IS NOT NULL AND lat != 0 AND lng != 0
+        ORDER BY scraped_at DESC
+        `)
+            .all();
+    }
+    countBuildingClusters(cityName) {
+        this.ensureOpen();
+        if (cityName && cityName.trim()) {
+            const row = this.db
+                .prepare(`SELECT COUNT(*) AS cnt FROM building_clusters WHERE LOWER(city_name) = ?`)
+                .get(cityName.trim().toLowerCase());
+            return Number(row?.cnt || 0);
+        }
+        const row = this.db.prepare(`SELECT COUNT(*) AS cnt FROM building_clusters`).get();
+        return Number(row?.cnt || 0);
+    }
+    replaceBuildingClusters(cityName, clusters) {
+        this.ensureOpen();
+        const now = new Date().toISOString();
+        const stmt = this.db.prepare(`
+      INSERT INTO building_clusters (
+        cluster_id, city_name, listing_ids_json, center_lat, center_lng, building_name, address_note, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cluster_id) DO UPDATE SET
+        city_name = excluded.city_name,
+        listing_ids_json = excluded.listing_ids_json,
+        center_lat = excluded.center_lat,
+        center_lng = excluded.center_lng,
+        building_name = CASE WHEN excluded.building_name != '' THEN excluded.building_name ELSE building_clusters.building_name END,
+        address_note = CASE WHEN excluded.address_note != '' THEN excluded.address_note ELSE building_clusters.address_note END,
+        updated_at = excluded.updated_at
+    `);
+        this.db.exec('BEGIN TRANSACTION');
+        try {
+            for (const c of clusters) {
+                stmt.run(c.cluster_id, cityName, JSON.stringify(c.listing_ids), c.center_lat, c.center_lng, c.building_name || '', c.address_note || '', now);
+            }
+            this.db.exec('COMMIT');
+        }
+        catch (err) {
+            this.db.exec('ROLLBACK');
+            throw err;
+        }
+    }
+    findCachedBuildingByCoords(lat, lng, radiusMeters = 50) {
+        this.ensureOpen();
+        const rows = this.db
+            .prepare(`SELECT center_lat, center_lng, building_name, address_note FROM geo_building_cache`)
+            .all();
+        let best = null;
+        for (const row of rows) {
+            const dist = (0, helpers_1.haversineMeters)(lat, lng, Number(row.center_lat), Number(row.center_lng));
+            if (dist <= radiusMeters && (!best || dist < best.dist)) {
+                best = {
+                    building_name: String(row.building_name || ''),
+                    address_note: String(row.address_note || ''),
+                    dist,
+                };
+            }
+        }
+        return best ? { building_name: best.building_name, address_note: best.address_note } : null;
+    }
+    upsertGeoBuildingCache(centerLat, centerLng, buildingName, addressNote = '') {
+        this.ensureOpen();
+        const now = new Date().toISOString();
+        const rows = this.db
+            .prepare(`SELECT id, center_lat, center_lng FROM geo_building_cache`)
+            .all();
+        for (const row of rows) {
+            const dist = (0, helpers_1.haversineMeters)(centerLat, centerLng, Number(row.center_lat), Number(row.center_lng));
+            if (dist <= 50) {
+                this.db
+                    .prepare(`UPDATE geo_building_cache SET building_name = ?, address_note = ?, updated_at = ? WHERE id = ?`)
+                    .run(buildingName, addressNote, now, row.id);
+                return;
+            }
+        }
+        this.db
+            .prepare(`INSERT INTO geo_building_cache (center_lat, center_lng, building_name, address_note, updated_at) VALUES (?, ?, ?, ?, ?)`)
+            .run(centerLat, centerLng, buildingName, addressNote, now);
+    }
+    applyBuildingNameToCluster(params) {
+        this.ensureOpen();
+        const { clusterId, buildingName, addressNote = '', centerLat, centerLng, radiusMeters = 50 } = params;
+        const targetIds = new Set();
+        const clusterRow = this.db
+            .prepare(`SELECT listing_ids_json, center_lat, center_lng FROM building_clusters WHERE cluster_id = ?`)
+            .get(clusterId);
+        let resolvedLat = centerLat ?? null;
+        let resolvedLng = centerLng ?? null;
+        if (clusterRow) {
+            try {
+                const ids = JSON.parse(clusterRow.listing_ids_json || '[]');
+                if (Array.isArray(ids)) {
+                    for (const id of ids)
+                        targetIds.add(String(id));
+                }
+            }
+            catch {
+            }
+            if (resolvedLat === null && clusterRow.center_lat != null)
+                resolvedLat = Number(clusterRow.center_lat);
+            if (resolvedLng === null && clusterRow.center_lng != null)
+                resolvedLng = Number(clusterRow.center_lng);
+        }
+        if (resolvedLat !== null && resolvedLng !== null && !Number.isNaN(resolvedLat) && !Number.isNaN(resolvedLng)) {
+            const coordRows = this.db
+                .prepare(`SELECT listing_id, lat, lng FROM listings WHERE lat IS NOT NULL AND lng IS NOT NULL AND lat != 0 AND lng != 0`)
+                .all();
+            for (const r of coordRows) {
+                if ((0, helpers_1.haversineMeters)(resolvedLat, resolvedLng, Number(r.lat), Number(r.lng)) <= radiusMeters) {
+                    targetIds.add(String(r.listing_id));
+                }
+            }
+            this.upsertGeoBuildingCache(resolvedLat, resolvedLng, buildingName, addressNote);
+        }
+        let updatedCount = 0;
+        if (targetIds.size > 0) {
+            const updateStmt = this.db.prepare(`UPDATE listings SET building_name = ?, is_high_rise = 1 WHERE listing_id = ?`);
+            this.db.exec('BEGIN TRANSACTION');
+            try {
+                for (const id of targetIds) {
+                    const info = updateStmt.run(buildingName, id);
+                    updatedCount += Number(info?.changes || 0);
+                }
+                this.db.exec('COMMIT');
+            }
+            catch (err) {
+                this.db.exec('ROLLBACK');
+                throw err;
+            }
+        }
+        if (clusterRow) {
+            this.db
+                .prepare(`UPDATE building_clusters SET building_name = ?, address_note = ?, updated_at = ? WHERE cluster_id = ?`)
+                .run(buildingName, addressNote, new Date().toISOString(), clusterId);
+        }
+        return updatedCount;
+    }
+};
+exports.DatabaseService = DatabaseService;
+exports.DatabaseService = DatabaseService = __decorate([
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [app_config_service_1.AppConfigService])
+], DatabaseService);
+//# sourceMappingURL=database.service.js.map

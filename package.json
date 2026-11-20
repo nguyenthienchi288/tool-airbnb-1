@@ -1,0 +1,46 @@
+{
+  "name": "airbnb-market-cli",
+  "version": "1.0.0",
+  "description": "Node.js CLI tool for scraping, deduplicating, classifying high-rise condos, and exporting comparative Excel reports from airbnb.com.vn for OTA Arbitrage market research.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "airbnb-market": "./src/index.js"
+  },
+  "scripts": {
+    "dev": "concurrently -n BACKEND,FRONTEND -c cyan,magenta \"npm --prefix backend run start:dev\" \"npm --prefix frontend run dev\"",
+    "start": "concurrently -n BACKEND,FRONTEND -c cyan,magenta \"npm --prefix backend run start:prod\" \"npm --prefix frontend run dev\"",
+    "start:backend": "npm --prefix backend run start:dev",
+    "start:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "build:backend": "npm --prefix backend run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "start:cli": "node src/index.js",
+    "start:web": "node src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [
+    "airbnb",
+    "ota-arbitrage",
+    "playwright",
+    "exceljs",
+    "cli",
+    "market-research"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cli-progress": "^3.12.0",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "ora": "^8.2.0",
+    "playwright": "^1.50.1"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.8.1"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7"
+  }
+}

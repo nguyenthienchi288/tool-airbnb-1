@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Airbnb.com.vn Market Research — OTA Arbitrage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen antialiased">
+  <!-- Header -->
+  <header class="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-20">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-rose-500 flex items-center justify-center font-bold text-white shadow">
+          A
+        </div>
+        <div>
+          <h1 class="text-base sm:text-lg font-semibold tracking-tight">
+            Airbnb.com.vn Market Research
+          </h1>
+          <p class="text-xs text-slate-400">
+            Thu thập, phân loại chung cư cao tầng &amp; xuất báo cáo Excel OTA Arbitrage
+          </p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2.5 text-xs">
+        <button
+          type="button"
+          id="versionBadgeBtn"
+          title="Xem nhật ký cập nhật"
+          class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/70 transition cursor-pointer"
+        >
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="versionBadgeText">Phiên bản: v1.4.0</span>
+          <span class="text-[11px] underline text-emerald-200 font-medium">Chi tiết cập nhật</span>
+        </button>
+        <span id="connectionStatus" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+          <span class="w-2 h-2 rounded-full bg-slate-400" id="statusDot"></span>
+          <span id="statusText">Sẵn sàng</span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- New Version Notification Banner -->
+  <div id="updateBanner" class="hidden bg-emerald-600 text-white text-xs border-b border-emerald-700">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex items-center justify-between gap-3">
+      <span id="updateBannerText" class="font-medium">
+        ✨ Hệ thống vừa nạp bản cập nhật mới thành công!
+      </span>
+      <button
+        type="button"
+        id="closeUpdateBannerBtn"
+        class="px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white font-bold leading-none"
+        title="Đóng thông báo"
+      >
+        &times;
+      </button>
+    </div>
+  </div>
+
+  <!-- Main 2-Column Layout -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <!-- LEFT COLUMN: Form Tùy Chỉnh Tham Số -->
+    <section class="lg:col-span-5 space-y-5">
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-base font-semibold text-slate-900">1. Tham số thu thập</h2>
+          <span class="text-xs text-slate-500">airbnb.com.vn</span>
+        </div>
+
+        <form id="scraperForm" class="space-y-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div>
+              <label for="city" class="block text-xs font-medium text-slate-700 mb-1">
+                Thành phố <span class="text-rose-500">*</span>
+              </label>
+              <input
+                id="city"
+                name="city"
+                type="text"
+                required
+                value="Bangkok"
+                placeholder="VD: Bangkok, Tokyo, Osaka"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+              />
+            </div>
+
+            <div>
+              <label for="country" class="block text-xs font-medium text-slate-700 mb-1">
+                Quốc gia <span class="text-rose-500">*</span>
+              </label>
+              <input
+                id="country"
+                name="country"
+                type="text"
+                required
+                value="Thailand"
+                placeholder="VD: Thailand, Japan"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+              />
+            </div>
+          </div>
+
+          <!-- Market Guardrail Red Alert -->
+          <div
+            id="guardrailAlert"
+            class="hidden rounded-lg bg-red-50 border border-red-300 p-3 text-xs text-red-800 flex items-start gap-2"
+          >
+            <span class="font-bold text-red-600 shrink-0">BỊ CHẶN:</span>
+            <span id="guardrailMessage">
+              Quốc gia nằm trong danh sách loại trừ. Không thể chạy thu thập.
+            </span>
+          </div>
+
+          <!-- Excluded Countries Tag/Chip Input -->
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <label for="excludedCountryInput" class="text-xs font-medium text-slate-700">
+                Danh sách quốc gia loại trừ (Market Guardrail)
+              </label>
+              <button
+                type="button"
+                id="resetExcludedBtn"
+                class="text-[11px] text-rose-600 hover:underline shrink-0"
+              >
+                Khôi phục mặc định
+              </button>
+            </div>
+
+            <div id="excludedTagsContainer" class="flex flex-wrap gap-1.5 min-h-[28px]"></div>
+
+            <div class="flex gap-2">
+              <input
+                id="excludedCountryInput"
+                type="text"
+                placeholder="Nhập tên quốc gia muốn chặn rồi nhấn Enter..."
+                class="flex-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+              <button
+                type="button"
+                id="addExcludedBtn"
+                class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-medium transition shrink-0"
+              >
+                + Thêm
+              </button>
+            </div>
+          </div>
+
+          <!-- Numeric Parameters -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label for="iterations" class="block text-xs font-medium text-slate-700 mb-1">
+                Số khung ngày quét
+              </label>
+              <input
+                id="iterations"
+                name="iterations"
+                type="number"
+                min="1"
+                max="30"
+                value="10"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+
+            <div>
+              <label for="targetRaw" class="block text-xs font-medium text-slate-700 mb-1">
+                Mục tiêu số căn thô
+              </label>
+              <input
+                id="targetRaw"
+                name="targetRaw"
+                type="number"
+                min="10"
+                max="1000"
+                value="100"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+
+            <div>
+              <label for="minHostsPerBuilding" class="block text-xs font-medium text-slate-700 mb-1">
+                Ngưỡng Host/tòa
+              </label>
+              <input
+                id="minHostsPerBuilding"
+                name="minHostsPerBuilding"
+                type="number"
+                min="1"
+                max="50"
+                value="5"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+          </div>
+
+          <!-- Collapsible Advanced Settings -->
+          <div class="border border-slate-200 rounded-lg overflow-hidden">
+            <button
+              type="button"
+              id="toggleAdvancedBtn"
+              class="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 transition"
+            >
+              <span>Cấu hình nâng cao &amp; Bộ lọc AMENITIES_DEFAULT</span>
+              <span id="advancedArrow" class="text-slate-500">▼</span>
+            </button>
+
+            <div id="advancedPanel" class="hidden p-3.5 space-y-3.5 border-t border-slate-200 bg-white">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label for="proxyUrl" class="block text-xs font-medium text-slate-700 mb-1">
+                    Proxy URL
+                  </label>
+                  <input
+                    id="proxyUrl"
+                    name="proxyUrl"
+                    type="text"
+                    placeholder="http://user:pass@ip:port"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div>
+                  <label for="delayMs" class="block text-xs font-medium text-slate-700 mb-1">
+                    Độ trễ (ms)
+                  </label>
+                  <input
+                    id="delayMs"
+                    name="delayMs"
+                    type="number"
+                    min="200"
+                    step="100"
+                    value="3000"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-5 pt-1">
+                <label class="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                  <input
+                    id="headless"
+                    name="headless"
+                    type="checkbox"
+                    checked
+                    class="rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                  />
+                  <span>Headless Mode (chạy ẩn trình duyệt)</span>
+                </label>
+
+                <label class="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                  <input
+                    id="exportOnly"
+                    name="exportOnly"
+                    type="checkbox"
+                    class="rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                  />
+                  <span>Chỉ xuất Excel từ SQLite</span>
+                </label>
+              </div>
+
+              <!-- AMENITIES_DEFAULT 3 keyword groups -->
+              <div class="pt-2 border-t border-slate-100 space-y-2.5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-semibold text-slate-700">
+                    Từ khóa lọc AMENITIES_DEFAULT (phân cách bằng dấu phẩy)
+                  </span>
+                  <button
+                    type="button"
+                    id="resetKeywordsBtn"
+                    class="text-[11px] text-rose-600 hover:underline"
+                  >
+                    Khôi phục mặc định
+                  </button>
+                </div>
+
+                <div>
+                  <label for="kwMandatory" class="block text-[11px] font-medium text-emerald-700 mb-1">
+                    Nhóm Thang máy / Tín hiệu chính (+3đ)
+                  </label>
+                  <textarea
+                    id="kwMandatory"
+                    rows="2"
+                    class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  ></textarea>
+                </div>
+
+                <div>
+                  <label for="kwBonus" class="block text-[11px] font-medium text-blue-700 mb-1">
+                    Cộng điểm — Tiện nghi khu phức hợp (+1đ/mục)
+                  </label>
+                  <textarea
+                    id="kwBonus"
+                    rows="3"
+                    class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  ></textarea>
+                </div>
+
+                <div>
+                  <label for="kwExcluded" class="block text-[11px] font-medium text-rose-700 mb-1">
+                    Loại trừ cứng (Nhà phố, Villa, Nhà gỗ... → NO)
+                  </label>
+                  <textarea
+                    id="kwExcluded"
+                    rows="2"
+                    class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  ></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Primary Action Button -->
+          <div class="pt-1">
+            <button
+              id="actionBtn"
+              type="submit"
+              class="w-full py-2.5 px-4 rounded-lg font-semibold text-sm text-white bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed transition shadow-sm"
+            >
+              Bắt đầu chạy
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Output Excel Reports Card -->
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-base font-semibold text-slate-900">File Excel đã xuất (output/)</h2>
+          <button
+            type="button"
+            id="refreshReportsBtn"
+            class="text-xs font-medium text-slate-600 hover:text-slate-900 px-2.5 py-1 rounded border border-slate-200 hover:bg-slate-50"
+          >
+            Làm mới
+          </button>
+        </div>
+        <div id="reportsList" class="space-y-2 max-h-64 overflow-y-auto text-xs">
+          <p class="text-slate-400 italic">Đang tải danh sách file...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT COLUMN: Theo Dõi & Xem Trước SQLite -->
+    <section class="lg:col-span-7 space-y-5">
+      <!-- Progress & Terminal Log -->
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-semibold text-slate-900">2. Tiến độ 4 bước &amp; Terminal Log</h2>
+          <span id="progressPercent" class="text-xs font-semibold text-rose-600">0%</span>
+        </div>
+
+        <!-- 4-Step Indicator -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <div id="stepCard1" class="step-card rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+            <div class="font-semibold text-slate-700">1. Quét Search</div>
+            <div class="text-[11px] text-slate-500">Đa khung ngày</div>
+          </div>
+          <div id="stepCard2" class="step-card rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+            <div class="font-semibold text-slate-700">2. PDP &amp; Host</div>
+            <div class="text-[11px] text-slate-500">Mở rộng Host</div>
+          </div>
+          <div id="stepCard3" class="step-card rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+            <div class="font-semibold text-slate-700">3. Phân loại</div>
+            <div class="text-[11px] text-slate-500">YES/NO &amp; Geo</div>
+          </div>
+          <div id="stepCard4" class="step-card rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+            <div class="font-semibold text-slate-700">4. Xuất Excel</div>
+            <div class="text-[11px] text-slate-500">Báo cáo .xlsx</div>
+          </div>
+        </div>
+
+        <!-- Progress Bar -->
+        <div>
+          <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+            <div
+              id="progressBar"
+              class="h-full bg-rose-600 transition-all duration-300"
+              style="width: 0%"
+            ></div>
+          </div>
+          <p id="progressLabel" class="text-xs text-slate-600 mt-1.5">
+            Chưa có tác vụ nào đang chạy.
+          </p>
+        </div>
+
+        <!-- Dark Terminal Log -->
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-xs font-medium text-slate-600">Terminal Log (SSE Real-time)</span>
+            <button
+              type="button"
+              id="clearLogBtn"
+              class="text-[11px] text-slate-500 hover:text-slate-800"
+            >
+              Xóa log
+            </button>
+          </div>
+          <div
+            id="terminalLog"
+            class="bg-slate-950 text-slate-200 font-mono text-xs rounded-lg p-3.5 h-60 overflow-y-auto space-y-1 border border-slate-800"
+          >
+            <div class="text-slate-500">Sẵn sàng nhận luồng dữ liệu từ server...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SQLite Quick Preview -->
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 class="text-base font-semibold text-slate-900">
+              3. Xem trước dữ liệu SQLite (<code class="text-xs font-mono text-slate-600">airbnb_market.db</code>)
+            </h2>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <select
+              id="previewCitySelect"
+              class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+            >
+              <option value="">-- Chọn thành phố --</option>
+            </select>
+            <button
+              type="button"
+              id="refreshDbBtn"
+              class="text-xs font-medium text-slate-600 hover:text-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50"
+            >
+              Tải lại DB
+            </button>
+          </div>
+        </div>
+
+        <!-- Summary KPIs -->
+        <div id="dbSummaryBar" class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+          <div class="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+            <div class="text-slate-500">Tổng căn sạch</div>
+            <div id="kpiClean" class="text-base font-bold text-slate-900">-</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+            <div class="text-slate-500">Cao tầng (YES)</div>
+            <div id="kpiHighRise" class="text-base font-bold text-emerald-600">-</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+            <div class="text-slate-500">Tòa đạt chuẩn</div>
+            <div id="kpiBuildings" class="text-base font-bold text-rose-600">-</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
+            <div class="text-slate-500">Giá TB / đêm</div>
+            <div id="kpiAvgPrice" class="text-base font-bold text-slate-900">-</div>
+          </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="border-b border-slate-200 flex flex-wrap gap-4 text-xs font-semibold">
+          <button
+            type="button"
+            id="tabBuildingsBtn"
+            class="pb-2 border-b-2 border-rose-600 text-rose-600"
+          >
+            Top Tòa Nhà Đạt Chuẩn
+          </button>
+          <button
+            type="button"
+            id="tabListingsBtn"
+            class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-800"
+          >
+            Đúng khu vực tìm kiếm (IN_TARGET)
+          </button>
+          <button
+            type="button"
+            id="tabExternalBtn"
+            class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-800"
+          >
+            Danh mục Host ngoài khu vực (OUT_OF_TARGET)
+          </button>
+        </div>
+
+        <!-- Tab 1: Top Buildings -->
+        <div id="tabBuildings" class="overflow-x-auto max-h-80 overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-50 text-slate-600 sticky top-0">
+              <tr>
+                <th class="py-2 px-2.5 border-b">#</th>
+                <th class="py-2 px-2.5 border-b">Tòa nhà</th>
+                <th class="py-2 px-2.5 border-b text-center">Host</th>
+                <th class="py-2 px-2.5 border-b text-center">Căn</th>
+                <th class="py-2 px-2.5 border-b text-right">Giá TB</th>
+                <th class="py-2 px-2.5 border-b">Trạng thái</th>
+              </tr>
+            </thead>
+            <tbody id="buildingsTableBody" class="divide-y divide-slate-100">
+              <tr>
+                <td colspan="6" class="py-6 text-center text-slate-400">Chưa có dữ liệu.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Tab 2: Listings YES/NO -->
+        <div id="tabListings" class="hidden overflow-x-auto max-h-80 overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-50 text-slate-600 sticky top-0">
+              <tr>
+                <th class="py-2 px-2.5 border-b">Căn hộ</th>
+                <th class="py-2 px-2.5 border-b">Tòa nhà</th>
+                <th class="py-2 px-2.5 border-b text-center">Cao tầng</th>
+                <th class="py-2 px-2.5 border-b text-right">Giá TB</th>
+                <th class="py-2 px-2.5 border-b">Lý do phân loại</th>
+              </tr>
+            </thead>
+            <tbody id="listingsTableBody" class="divide-y divide-slate-100">
+              <tr>
+                <td colspan="5" class="py-6 text-center text-slate-400">Chưa có dữ liệu.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Tab 3: Host External Portfolio (OUT_OF_TARGET) -->
+        <div id="tabExternal" class="hidden overflow-x-auto max-h-80 overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-50 text-slate-600 sticky top-0">
+              <tr>
+                <th class="py-2 px-2.5 border-b">Tên Host</th>
+                <th class="py-2 px-2.5 border-b">Căn hộ</th>
+                <th class="py-2 px-2.5 border-b">Quốc gia / Khu vực thực tế</th>
+                <th class="py-2 px-2.5 border-b text-right">Giá TB</th>
+                <th class="py-2 px-2.5 border-b">Tọa độ</th>
+              </tr>
+            </thead>
+            <tbody id="externalTableBody" class="divide-y divide-slate-100">
+              <tr>
+                <td colspan="5" class="py-6 text-center text-slate-400">Chưa có danh mục ngoài vùng.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Changelog Modal -->
+  <div
+    id="changelogModal"
+    class="hidden fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+  >
+    <div class="bg-white rounded-xl shadow-xl border border-slate-200 max-w-lg w-full overflow-hidden">
+      <div class="bg-slate-900 text-white px-5 py-3.5 flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-semibold">Nhật ký cập nhật hệ thống</h3>
+          <p id="modalVersionSub" class="text-xs text-emerald-300 mt-0.5">v1.4.0</p>
+        </div>
+        <button
+          type="button"
+          id="closeChangelogModalBtn"
+          class="text-slate-400 hover:text-white text-lg font-bold leading-none px-1.5"
+        >
+          &times;
+        </button>
+      </div>
+      <div class="p-5 space-y-3 text-xs text-slate-700">
+        <div class="flex items-center justify-between text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <span>Thời điểm build / khởi động BE:</span>
+          <span id="modalUpdatedAt" class="font-mono font-semibold text-slate-800">-</span>
+        </div>
+        <div>
+          <div class="font-semibold text-slate-900 mb-2">Các thay đổi nổi bật:</div>
+          <ul id="modalChangelogList" class="space-y-1.5 list-disc pl-5 text-slate-700"></ul>
+        </div>
+      </div>
+      <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+        <button
+          type="button"
+          id="okChangelogModalBtn"
+          class="px-4 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition"
+        >
+          Đóng
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=1.6.0"></script>
+</body>
+</html>

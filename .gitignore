@@ -1,0 +1,51 @@
+# Nestjs specific
+/dist
+/node_modules
+/build
+/tmp
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# dotenv environment variable files
+.env*
+!.env.example
+!.env.development.example
+!.env.test.example
+!.env.production.example
+
+# temp directory
+.temp
+.tmp
+
+# Local service-account credentials
+*firebase-adminsdk*.json
+service-account*.json
+*-service-account*.json
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Legacy API collection: review for credentials before tracking.
+posman.json
+
+# Ignore runtime data, browser profiles and output files
+output/
+data/chrome_vpn_profile/
+data/chrome_tab2_isolated/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+output/
+data/

@@ -1,0 +1,36 @@
+{
+  "name": "airbnb-market-backend",
+  "version": "2.0.0",
+  "description": "NestJS + TypeScript backend for Airbnb Market Research & High-Rise Condo Arbitrage",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/main.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "exceljs": "^4.4.0",
+    "playwright": "^1.50.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "undici": "^8.12.4"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/schematics": "^11.0.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

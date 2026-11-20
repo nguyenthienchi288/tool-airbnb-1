@@ -1,0 +1,21 @@
+import { Global, Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import * as path from 'path';
+import { AppConfigService } from './app-config.service';
+
+@Global()
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [
+        path.resolve(process.cwd(), '.env'),
+        path.resolve(process.cwd(), '..', '.env'),
+        path.resolve(__dirname, '..', '..', '..', '.env'),
+      ],
+    }),
+  ],
+  providers: [AppConfigService],
+  exports: [AppConfigService],
+})
+export class AppConfigModule {}
