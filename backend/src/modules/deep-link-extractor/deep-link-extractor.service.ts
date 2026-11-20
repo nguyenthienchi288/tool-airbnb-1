@@ -9,9 +9,11 @@ import {
   sleep,
 } from '../../common/helpers';
 import { AppConfigService } from '../../config/app-config.service';
+import { DatabaseService } from '../database/database.service';
 import { PdpParserService } from '../parser/pdp-parser.service';
 import { HostParserService } from '../parser/host-parser.service';
 import { BrowserService } from '../scraper/browser.service';
+import { AiEnrichmentService } from './ai-enrichment.service';
 import { buildSevenNightsPreview, exportSevenNightsBundle } from './bundle-exporter';
 import {
   extractBuildingNameFromText,
@@ -86,9 +88,11 @@ export class DeepLinkExtractorService {
 
   constructor(
     private readonly appConfig: AppConfigService,
+    private readonly db: DatabaseService,
     private readonly browserService: BrowserService,
     private readonly pdpParser: PdpParserService,
     private readonly hostParser: HostParserService,
+    private readonly aiEnrichment: AiEnrichmentService,
   ) {}
 
   parseUrl(rawUrl: string): ParsedAirbnbUrl {
@@ -416,26 +420,32 @@ export class DeepLinkExtractorService {
     checkOutTime: string;
     childPolicy: string;
   } {
-    const checkInMatch =
-      text.match(/Check-in(?:\s+after|\s+is|\s*:)?\s*([^\n.;]+(?:AM|PM|:\d{2}))/i) ||
-      text.match(/入住时间[：:]\s*([^\n]+)/i);
-    const checkOutMatch =
-      text.match(/Checkout(?:\s+before|\s+is|\s*:)?\s*([^\n.;]+(?:AM|PM|:\d{2}))/i) ||
-      text.match(/Check-out(?:\s+before|\s+is|\s*:)?\s*([^\n.;]+(?:AM|PM|:\d{2}))/i) ||
-      text.match(/退房时间[：:]\s*([^\n]+)/i);
+    const lineSafe = (text || '').replace(/[\u202f\u00a0\u2009]/g, ' ');
+    let checkInTime = '';
+    let checkOutTime = '';
+
+    const checkInMatch = lineSafe.match(
+      /Check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?(?:\s*[-–~]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)?)/i,
+    );
+    if (checkInMatch) {
+      checkInTime = normalizeUnicodeSpaces(checkInMatch[1]);
+    }
+
+    const checkOutMatch = lineSafe.match(
+      /(?:Check-?out|Checkout)(?:\s+before|\s+by|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)/i,
+    );
+    if (checkOutMatch) {
+      checkOutTime = normalizeUnicodeSpaces(checkOutMatch[1]);
+    }
 
     let childPolicy = '';
-    if (/not suitable for (children|infants)/i.test(text)) {
+    if (/not suitable for (children|infants)/i.test(lineSafe)) {
       childPolicy = 'Not suitable for infants/children';
-    } else if (/suitable for children/i.test(text) || /children welcome/i.test(text)) {
+    } else if (/suitable for children/i.test(lineSafe) || /children welcome/i.test(lineSafe)) {
       childPolicy = 'Suitable for children';
     }
 
-    return {
-      checkInTime: checkInMatch ? cleanControlChars(checkInMatch[1]) : '',
-      checkOutTime: checkOutMatch ? cleanControlChars(checkOutMatch[1]) : '',
-      childPolicy,
-    };
+    return { checkInTime, checkOutTime, childPolicy };
   }
 
   private async runPipeline(
@@ -580,7 +590,23 @@ export class DeepLinkExtractorService {
     >();
 
     let page = await context.newPage();
-    await page.bringToFront();
+    await page.bringToFront().catch(() => {});
+    try {
+      const cdp = await context.newCDPSession(page);
+      const { windowId } = await cdp.send('Browser.getWindowForTarget');
+      await cdp.send('Browser.setWindowBounds', {
+        windowId,
+        bounds: {
+          windowState: 'normal',
+          left: 60,
+          top: 40,
+          width: 1366,
+          height: 820,
+        },
+      });
+    } catch {
+      // Ignore if CDP window bounds unsupported
+    }
     this.pushLog(job, '[Browser Tab 2] Đã mở cửa sổ Chrome for Testing độc lập!', 'success');
     let myGen = contextGeneration;
 
@@ -726,27 +752,62 @@ export class DeepLinkExtractorService {
       }
       page.off('response', onSearchResp);
 
-      // Lọc theo khung tọa độ Bounding Box
-      const candidates = Array.from(candidateMap.values()).filter((c) => {
-        if (!input.strictBoundsOnly || !parsed.mapBounds.hasBounds) return true;
-        if (c.lat === null || c.lng === null) return true; // Sẽ kiểm tra lại sau khi đọc PDP
-        const check = checkBoundingBox(c.lat, c.lng, parsed.mapBounds);
-        return check.status === 'inside' || check.status === 'nearby';
-      });
+      // Lọc theo khung tọa độ Bounding Box & sắp xếp cố định theo Airbnb Listing ID tăng dần
+      const candidates = Array.from(candidateMap.values())
+        .filter((c) => {
+          if (!input.strictBoundsOnly || !parsed.mapBounds.hasBounds) return true;
+          if (c.lat === null || c.lng === null) return true;
+          const check = checkBoundingBox(c.lat, c.lng, parsed.mapBounds);
+          return check.status === 'inside' || check.status === 'nearby';
+        })
+        .sort((a, b) => a.listingId.localeCompare(b.listingId));
 
       this.pushLog(
         job,
-        `[Bước 1 Hoàn tất] Tổng tìm thấy: ${candidateMap.size} căn • Sau lọc khung bản đồ: ${candidates.length} căn cần trích xuất sâu.`,
+        `[Bước 1 Hoàn tất] Tổng tìm thấy: ${candidateMap.size} căn • Sau lọc khung bản đồ: ${candidates.length} căn (đã sắp xếp cố định theo ID).`,
         'step',
       );
 
+      // Nạp checkpoint từ SQLite tab2_room_cache
+      const cachedMap = this.db.getTab2CachedRooms(candidates.map((c) => c.listingId));
+      const extractedById = new Map<string, DeepExtractedRoom>();
+      const excludedOutsideIds = new Set<string>();
+      for (const cand of candidates) {
+        const cached = cachedMap.get(cand.listingId);
+        if (cached && cached.isComplete && cached.room) {
+          extractedById.set(cand.listingId, cached.room as DeepExtractedRoom);
+        }
+      }
+      if (extractedById.size > 0) {
+        this.pushLog(
+          job,
+          `[Checkpoint SQLite] Đã khôi phục ${extractedById.size}/${candidates.length} căn hoàn chỉnh từ cache.`,
+          'info',
+        );
+      }
+
       // =====================================================================
-      // BƯỚC 2: Đọc sâu 100% chi tiết từng căn hộ + Hồ sơ Host (Single Tab)
+      // BƯỚC 2: Đọc sâu 100% chi tiết từng căn hộ + Auto-Retry tối đa 3 vòng
       // =====================================================================
-      for (let i = 0; i < candidates.length; i++) {
+      for (let round = 1; round <= 3; round++) {
         if (job.abortController.signal.aborted) break;
-        const cand = candidates[i];
-        const mySkip = skipVersion;
+        const pendingCandidates = candidates.filter(
+          (c) => !extractedById.has(c.listingId) && !excludedOutsideIds.has(c.listingId),
+        );
+        if (pendingCandidates.length === 0) break;
+
+        if (round > 1) {
+          this.pushLog(
+            job,
+            `[Auto-Retry Vòng ${round}/3] Đang chạy bù ${pendingCandidates.length} căn còn thiếu để đạt 100%...`,
+            'step',
+          );
+        }
+
+        for (let i = 0; i < pendingCandidates.length; i++) {
+          if (job.abortController.signal.aborted) break;
+          const cand = pendingCandidates[i];
+          const mySkip = skipVersion;
 
         for (let attempt = 0; attempt < 3; attempt++) {
           if (job.abortController.signal.aborted) break;
@@ -878,26 +939,13 @@ export class DeepLinkExtractorService {
                 .catch(() => '');
               const houseRulesText = normalizeUnicodeSpaces(`${sectionRulesText}\n${modalRulesText}`);
 
-              // 4. Bấm mở Thư viện ảnh (Show all photos) để vét toàn bộ ảnh gốc
-              const domGalleryPhotos = new Set<string>();
+              // 4. Bấm mở Thư viện ảnh (Show all photos) để kích hoạt JSON PHOTO_TOUR_SCROLLABLE_MODAL
               const showPhotosBtn = page
                 .locator('button:has-text("Show all photos"), button:has-text("Hiển thị tất cả ảnh"), button:has-text("显示所有照片")')
                 .first();
               if ((await showPhotosBtn.count()) > 0 && (await showPhotosBtn.isVisible().catch(() => false))) {
                 await showPhotosBtn.click({ timeout: 3000 }).catch(() => {});
                 await sleep(1800);
-                const galleryImgs = await page
-                  .locator('[role="dialog"] img[src*="muscache.com/im/pictures"], img[src*="muscache.com/im/pictures"]')
-                  .evaluateAll((els) => els.map((e) => e.getAttribute('src') || ''))
-                  .catch(() => []);
-                for (const pUrl of galleryImgs) {
-                  if (
-                    pUrl &&
-                    !/user|AirbnbPlatformAssets|search-bar-icons|orthographic-images/i.test(pUrl)
-                  ) {
-                    domGalleryPhotos.add(pUrl.replace(/im_w=\d+/i, 'im_w=1200'));
-                  }
-                }
                 await page.keyboard.press('Escape').catch(() => {});
                 await sleep(500);
               }
@@ -923,6 +971,7 @@ export class DeepLinkExtractorService {
                 parsed.mapBounds.hasBounds &&
                 boundsCheck.status === 'outside'
               ) {
+                excludedOutsideIds.add(cand.listingId);
                 this.pushLog(
                   job,
                   `[Lọc tọa độ] Bỏ qua căn #${cand.listingId} vì nằm ngoài khung bản đồ (${finalLat}, ${finalLng}).`,
@@ -1015,9 +1064,8 @@ export class DeepLinkExtractorService {
                   `${rawTitle}\n${baseRecord?.subtitle || ''}\n${fullDescription}\n${hostName}`,
                 );
 
-              const finalPhotos = Array.from(
-                new Set([...structured.photoUrls, ...domGalleryPhotos]),
-              );
+              // Lấy 100% ảnh từ JSON gốc StaysPdpSections (PHOTO_TOUR_SCROLLABLE_MODAL / HERO_DEFAULT)
+              const finalPhotos = [...structured.photoUrls];
 
               const city = parsed.platformLocation.cityGuess || 'Seoul';
               const country = parsed.platformLocation.countryGuess || 'South Korea';
@@ -1078,16 +1126,29 @@ export class DeepLinkExtractorService {
                 hostTotalListings,
               };
 
-              extractedRooms.push(deepRoom);
+              extractedById.set(cand.listingId, deepRoom);
+              const isRoomComplete =
+                Boolean(deepRoom.title && !/stay tuned/i.test(deepRoom.title)) &&
+                isValidHostName(deepRoom.hostName);
+              this.db.upsertTab2RoomCache(
+                cand.listingId,
+                parsed.platformLocation.placeId || parsed.platformLocation.cityGuess,
+                JSON.stringify(deepRoom),
+                isRoomComplete,
+              );
+
+              const currentList = candidates
+                .map((c) => extractedById.get(c.listingId))
+                .filter((r): r is DeepExtractedRoom => Boolean(r));
               job.preview = buildSevenNightsPreview(
-                extractedRooms,
+                currentList,
                 city,
                 input.downloadPhotos ? 'Photos' : '',
               );
               this.broadcast(job, 'preview', job.preview);
               this.pushLog(
                 job,
-                `[${i + 1}/${candidates.length}] Đã trích xuất #${cand.listingId} ("${deepRoom.title.slice(0, 40)}...") | ${deepRoom.photoUrls.length} ảnh | ${boundsCheck.label}`,
+                `[Vòng ${round} | ${i + 1}/${pendingCandidates.length}] Đã trích xuất #${cand.listingId} ("${deepRoom.title.slice(0, 40)}...") | ${deepRoom.photoUrls.length} ảnh JSON | ${boundsCheck.label}`,
                 'success',
               );
               break;
@@ -1115,6 +1176,18 @@ export class DeepLinkExtractorService {
           }
         }
       }
+      } // end retry rounds
+
+      extractedRooms.push(
+        ...candidates
+          .map((c) => extractedById.get(c.listingId))
+          .filter((r): r is DeepExtractedRoom => Boolean(r)),
+      );
+      this.pushLog(
+        job,
+        `[Airbnb JSON] Đã lấy chuẩn ${extractedRooms.length}/${candidates.length} căn, thông số phòng, 9 tiện nghi và 100% URL ảnh.`,
+        'step',
+      );
     } finally {
       await this.browserService.forceClose();
       await context.close().catch(() => {});
@@ -1123,50 +1196,135 @@ export class DeepLinkExtractorService {
     }
 
     // =======================================================================
-    // BƯỚC 2.5: Tổng hợp chéo tên Tòa nhà & tra cứu Địa chỉ chuẩn theo Tên tòa nhà
+    // BƯỚC 2.5: Hybrid AI Enrichment (Gemini / ChatGPT) & Fallback Regex/Geo
     // =======================================================================
     if (extractedRooms.length > 0) {
-      const buildingCounts = new Map<string, number>();
-      for (const r of extractedRooms) {
-        if (r.buildingName && !isBlacklistedBuildingName(r.buildingName)) {
-          buildingCounts.set(r.buildingName, (buildingCounts.get(r.buildingName) || 0) + 1);
-        }
-      }
-      let dominantBuilding = '';
-      let maxCount = 0;
-      for (const [bName, cnt] of buildingCounts.entries()) {
-        if (cnt > maxCount) {
-          dominantBuilding = bName;
-          maxCount = cnt;
-        }
-      }
+      const { provider, apiKey } = this.aiEnrichment.resolveProviderAndKey(
+        input.aiProvider,
+        input.aiApiKey,
+        input.enableAiEnrichment !== false,
+      );
 
-      if (dominantBuilding) {
-        const firstDist = extractedRooms.find((r) => r.district)?.district || '';
-        const firstCity = extractedRooms[0].city || 'Seoul';
-        const addrHit = await searchAddressByBuildingName(dominantBuilding, firstDist, firstCity);
+      // Tính tâm tọa độ & Reverse Geocoding thô làm ngữ cảnh cho AI
+      const validCoordRooms = extractedRooms.filter((r) => r.lat !== null && r.lng !== null);
+      const centerLat =
+        validCoordRooms.length > 0
+          ? validCoordRooms.reduce((s, r) => s + (r.lat || 0), 0) / validCoordRooms.length
+          : null;
+      const centerLng =
+        validCoordRooms.length > 0
+          ? validCoordRooms.reduce((s, r) => s + (r.lng || 0), 0) / validCoordRooms.length
+          : null;
+      const baseReverseGeo = await reverseGeocodeCoords(centerLat, centerLng);
+
+      if (provider !== 'none' && apiKey) {
+        const providerLabel = provider === 'gemini' ? 'Gemini' : 'ChatGPT';
+        this.pushProgress(
+          job,
+          88,
+          `Bước 2.5/3: Đang chuẩn hóa dữ liệu bằng AI (${providerLabel})...`,
+        );
+
+        const aiBuilding = await this.aiEnrichment.enrichBuildingCluster({
+          provider,
+          apiKey,
+          rooms: extractedRooms,
+          reverseGeoAddress: baseReverseGeo?.address,
+          centerLat,
+          centerLng,
+        });
+
+        const aiRoomsMap = await this.aiEnrichment.enrichRoomsBatch({
+          provider,
+          apiKey,
+          rooms: extractedRooms,
+        });
+
         for (const r of extractedRooms) {
-          if (!r.buildingName || isBlacklistedBuildingName(r.buildingName)) {
-            r.buildingName = dominantBuilding;
+          if (aiBuilding) {
+            if (aiBuilding.building_name && !isBlacklistedBuildingName(aiBuilding.building_name)) {
+              r.buildingName = aiBuilding.building_name;
+            }
+            if (aiBuilding.address) r.address = aiBuilding.address;
+            if (aiBuilding.district) r.district = aiBuilding.district;
+            if (aiBuilding.city) r.city = aiBuilding.city;
+            if (aiBuilding.country) r.country = aiBuilding.country;
+            if (aiBuilding.swimming_pool) r.amenityFlags.swimmingPool = aiBuilding.swimming_pool;
+            if (aiBuilding.gym) r.amenityFlags.gym = aiBuilding.gym;
+            if (aiBuilding.gym_fee) r.amenityFlags.gymFee = aiBuilding.gym_fee;
+            if (aiBuilding.parking) r.amenityFlags.parking = aiBuilding.parking;
           }
-          if (addrHit?.address) r.address = addrHit.address;
-          if (addrHit?.district && !r.district) r.district = addrHit.district;
-          if (addrHit?.city) r.city = addrHit.city;
-          if (addrHit?.country) r.country = addrHit.country;
+          const aiRoom = aiRoomsMap.get(r.listingId);
+          if (aiRoom) {
+            if (aiRoom.supplier_apartment_code && !r.supplierApartmentCode) {
+              r.supplierApartmentCode = aiRoom.supplier_apartment_code;
+            }
+            if (aiRoom.child_policy && !r.childPolicy) {
+              r.childPolicy = aiRoom.child_policy;
+            }
+            if (aiRoom.check_in_time && !r.checkInTime) {
+              r.checkInTime = normalizeUnicodeSpaces(aiRoom.check_in_time);
+            }
+            if (aiRoom.check_out_time && !r.checkOutTime) {
+              r.checkOutTime = normalizeUnicodeSpaces(aiRoom.check_out_time);
+            }
+            if (aiRoom.clean_host_name && isValidHostName(aiRoom.clean_host_name)) {
+              r.hostName = aiRoom.clean_host_name;
+            }
+            if (aiRoom.room_type_verified) {
+              r.roomType = aiRoom.room_type_verified;
+            }
+          }
         }
+
         this.pushLog(
           job,
-          `[Tổng hợp Tòa nhà] Chốt tên tòa nhà chuẩn: "${dominantBuilding}"${addrHit?.address ? ` | Địa chỉ: ${addrHit.address}` : ''}`,
-          'step',
+          `[AI Enrichment - ${providerLabel}] Đã chuẩn hóa tòa nhà: ${aiBuilding?.building_name || extractedRooms[0].buildingName || 'N/A'} | Gym fee: ${aiBuilding?.gym_fee || 'N/A'} | Đã bổ sung Child policy & Mã căn.`,
+          'success',
         );
       } else {
-        // Fallback reverse geocoding cho từng căn nếu chưa có tên tòa nhà / quận / địa chỉ đường phố
+        // Fallback Regex + Nominatim khi không dùng AI / chưa có API Key
+        const buildingCounts = new Map<string, number>();
         for (const r of extractedRooms) {
-          if (!r.address || r.address === r.city || !r.district || !r.buildingName) {
-            const rev = await reverseGeocodeCoords(r.lat, r.lng);
-            if (rev?.buildingName && !r.buildingName) r.buildingName = rev.buildingName;
-            if (rev?.address && (!r.address || r.address === r.city)) r.address = rev.address;
-            if (rev?.district && !r.district) r.district = rev.district;
+          if (r.buildingName && !isBlacklistedBuildingName(r.buildingName)) {
+            buildingCounts.set(r.buildingName, (buildingCounts.get(r.buildingName) || 0) + 1);
+          }
+        }
+        let dominantBuilding = '';
+        let maxCount = 0;
+        for (const [bName, cnt] of buildingCounts.entries()) {
+          if (cnt > maxCount) {
+            dominantBuilding = bName;
+            maxCount = cnt;
+          }
+        }
+
+        if (dominantBuilding) {
+          const firstDist = extractedRooms.find((r) => r.district)?.district || '';
+          const firstCity = extractedRooms[0].city || 'Seoul';
+          const addrHit = await searchAddressByBuildingName(dominantBuilding, firstDist, firstCity);
+          for (const r of extractedRooms) {
+            if (!r.buildingName || isBlacklistedBuildingName(r.buildingName)) {
+              r.buildingName = dominantBuilding;
+            }
+            if (addrHit?.address) r.address = addrHit.address;
+            if (addrHit?.district && !r.district) r.district = addrHit.district;
+            if (addrHit?.city) r.city = addrHit.city;
+            if (addrHit?.country) r.country = addrHit.country;
+          }
+          this.pushLog(
+            job,
+            `[Fallback Parser] Chốt tên tòa nhà: "${dominantBuilding}"${addrHit?.address ? ` | Địa chỉ: ${addrHit.address}` : ''}`,
+            'step',
+          );
+        } else {
+          for (const r of extractedRooms) {
+            if (!r.address || r.address === r.city || !r.district || !r.buildingName) {
+              const rev = await reverseGeocodeCoords(r.lat, r.lng);
+              if (rev?.buildingName && !r.buildingName) r.buildingName = rev.buildingName;
+              if (rev?.address && (!r.address || r.address === r.city)) r.address = rev.address;
+              if (rev?.district && !r.district) r.district = rev.district;
+            }
           }
         }
       }

@@ -104,7 +104,12 @@ export function buildSevenNightsPreview(
     return `${baseSlug}-${String(count).padStart(3, '0')}`;
   };
 
-  extractedRooms.forEach((room, idx) => {
+  // Sắp xếp cố định theo Airbnb Listing ID tăng dần để mọi máy tính xuất ra mã phòng & thứ tự giống nhau 100%
+  const sortedRooms = [...extractedRooms].sort((a, b) =>
+    a.listingId.localeCompare(b.listingId),
+  );
+
+  sortedRooms.forEach((room, idx) => {
     const roomCode = `${citySlugUpper}-ROOM-${String(idx + 1).padStart(3, '0')}`;
     const city = room.city || defaultCity;
     const country = room.country || (city.toLowerCase().includes('seoul') ? 'South Korea' : '');
@@ -172,6 +177,8 @@ export function buildSevenNightsPreview(
 
     roomRows.push({
       'Room code': roomCode,
+      'Airbnb Room ID': room.listingId,
+      'Room URL': `https://www.airbnb.com/rooms/${room.listingId}`,
       'building name': bGroup.name,
       'Building code': bGroup.code,
       'Host name': hGroup.name,
@@ -255,26 +262,33 @@ export function buildSevenNightsPreview(
   return { buildings, hosts, rooms: roomRows };
 }
 
-async function downloadSinglePhoto(url: string, destPath: string): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
-    const resp = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      },
-    });
-    clearTimeout(timer);
-    if (!resp.ok) return false;
-    const arrayBuf = await resp.arrayBuffer();
-    if (arrayBuf.byteLength < 500) return false;
-    fs.writeFileSync(destPath, Buffer.from(arrayBuf));
-    return true;
-  } catch {
-    return false;
+async function downloadSinglePhoto(
+  url: string,
+  destPath: string,
+  maxRetries = 2,
+): Promise<boolean> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 14000);
+      const resp = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        },
+      });
+      clearTimeout(timer);
+      if (!resp.ok) continue;
+      const arrayBuf = await resp.arrayBuffer();
+      if (arrayBuf.byteLength < 500) continue;
+      fs.writeFileSync(destPath, Buffer.from(arrayBuf));
+      return true;
+    } catch {
+      // Retry
+    }
   }
+  return false;
 }
 
 export async function exportSevenNightsBundle(params: {
@@ -302,8 +316,11 @@ export async function exportSevenNightsBundle(params: {
   const dateStamp = formatDateStamp(now);
   const dateTimeStamp = formatDateTimeStamp(now);
 
+  // Sắp xếp cố định theo listingId trước khi tải ảnh & xuất Excel
+  const sortedRooms = [...rooms].sort((a, b) => a.listingId.localeCompare(b.listingId));
+
   const prePreview = buildSevenNightsPreview(
-    rooms,
+    sortedRooms,
     locationLabel,
     downloadPhotos ? 'Photos' : '',
   );
@@ -331,18 +348,18 @@ export async function exportSevenNightsBundle(params: {
   const preview = prePreview;
 
   let totalPhotosDownloaded = 0;
-  if (downloadPhotos && rooms.length > 0) {
+  if (downloadPhotos && sortedRooms.length > 0) {
     const photosRoot = path.join(bundleDir, 'Photos');
     fs.mkdirSync(photosRoot, { recursive: true });
-    onLog?.(`[Photos] Đang tải ảnh chất lượng cao cho ${rooms.length} căn hộ...`, 'step');
+    onLog?.(`[Photos] Đang tải 100% ảnh chất lượng cao cho ${sortedRooms.length} căn hộ...`, 'step');
 
-    for (let i = 0; i < rooms.length; i++) {
-      const room = rooms[i];
+    for (let i = 0; i < sortedRooms.length; i++) {
+      const room = sortedRooms[i];
       const roomCode = preview.rooms[i]?.['Room code'] || `ROOM-${i + 1}`;
       const roomPhotoDir = path.join(photosRoot, roomCode);
       fs.mkdirSync(roomPhotoDir, { recursive: true });
 
-      const urls = room.photoUrls.slice(0, 25);
+      const urls = room.photoUrls;
       const concurrency = 4;
       let cursor = 0;
       let roomPhotoCount = 0;
@@ -352,7 +369,7 @@ export async function exportSevenNightsBundle(params: {
           const photoUrl = urls[idx];
           const ext = /\.webp/i.test(photoUrl) ? 'webp' : 'jpg';
           const dest = path.join(roomPhotoDir, `${String(idx + 1).padStart(2, '0')}.${ext}`);
-          const ok = await downloadSinglePhoto(photoUrl, dest);
+          const ok = await downloadSinglePhoto(photoUrl, dest, 2);
           if (ok) {
             totalPhotosDownloaded++;
             roomPhotoCount++;
@@ -426,6 +443,8 @@ export async function exportSevenNightsBundle(params: {
   const rSheet = sevenNightsWb.addWorksheet('ROOM INFOR');
   rSheet.columns = [
     { header: 'Room code', key: 'Room code', width: 22 },
+    { header: 'Airbnb Room ID', key: 'Airbnb Room ID', width: 22 },
+    { header: 'Room URL', key: 'Room URL', width: 42 },
     { header: 'building name', key: 'building name', width: 30 },
     { header: 'Building code', key: 'Building code', width: 26 },
     { header: 'Host name', key: 'Host name', width: 24 },
@@ -489,7 +508,7 @@ export async function exportSevenNightsBundle(params: {
     { header: 'URL', key: 'url', width: 45 },
   ];
   styleHeader(rawSheet.getRow(1), 'FF1E293B');
-  for (const r of rooms) {
+  for (const r of sortedRooms) {
     rawSheet.addRow({
       ...r,
       amenitiesCount: r.amenities.length,
@@ -497,7 +516,7 @@ export async function exportSevenNightsBundle(params: {
     });
   }
   await rawWb.xlsx.writeFile(path.join(bundleDir, rawExcelFile));
-  fs.writeFileSync(path.join(bundleDir, rawJsonFile), JSON.stringify(rooms, null, 2), 'utf8');
+  fs.writeFileSync(path.join(bundleDir, rawJsonFile), JSON.stringify(sortedRooms, null, 2), 'utf8');
 
   // 3. Đóng gói .zip toàn bộ thư mục kết quả
   const zipFileName = `7Nights_Global_${buildingLabel}_${dateStamp}.zip`;

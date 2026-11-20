@@ -49,12 +49,22 @@ const INVALID_HOST_NAMES = new Set([
   'meet your host',
   'superhost',
   'stay tuned',
+  'log in',
+  'sign up',
+  'login',
+  'signup',
+  'oops',
+  'error',
+  '429',
+  '503',
 ]);
 
 export function isValidHostName(name: string): boolean {
   const clean = normalizeUnicodeSpaces(name).toLowerCase();
   if (!clean || clean.length <= 1) return false;
-  return !INVALID_HOST_NAMES.has(clean);
+  if (INVALID_HOST_NAMES.has(clean)) return false;
+  if (/(log\s*in|sign\s*up|oops|stay\s*tuned|error\s*\d{3})/i.test(clean)) return false;
+  return true;
 }
 
 /**
@@ -219,17 +229,30 @@ export function extractStructuredPdpFromJson(
           if (!combined) continue;
           ruleItems.push(combined);
 
-          if (/check-?in/i.test(rTitle)) {
-            const timeVal = rTitle
+          const hasTimeDigit = /\d/.test(rTitle);
+          if (hasTimeDigit && /check-?in/i.test(rTitle) && /(?:check-?out|checkout|퇴실)/i.test(rTitle)) {
+            const parts = rTitle.split(/(?=check-?out|checkout|퇴실)/i);
+            const inPart = (parts[0] || '')
               .replace(/^.*?check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*/i, '')
               .trim();
-            if (timeVal && !result.checkInTime) result.checkInTime = timeVal;
-          }
-          if (/check-?out/i.test(rTitle)) {
-            const timeVal = rTitle
-              .replace(/^.*?check-?out(?:\s+before|\s+by|\s+is|\s*:)?\s*/i, '')
+            const outPart = (parts.slice(1).join(' ') || '')
+              .replace(/^.*?(?:check-?out|checkout|퇴실)(?:\s+before|\s+by|\s+is|\s*:)?\s*/i, '')
               .trim();
-            if (timeVal && !result.checkOutTime) result.checkOutTime = timeVal;
+            if (inPart && !result.checkInTime) result.checkInTime = inPart;
+            if (outPart && !result.checkOutTime) result.checkOutTime = outPart;
+          } else if (hasTimeDigit) {
+            if (/^check-?in/i.test(rTitle) || /check-?in\s*(?:after|from|is|:)/i.test(rTitle)) {
+              const timeVal = rTitle
+                .replace(/^.*?check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*/i, '')
+                .trim();
+              if (timeVal && !result.checkInTime) result.checkInTime = timeVal;
+            }
+            if (/check-?out|checkout|퇴실/i.test(rTitle)) {
+              const timeVal = rTitle
+                .replace(/^.*?(?:check-?out|checkout|퇴실)(?:\s+before|\s+by|\s+is|\s*:)?\s*/i, '')
+                .trim();
+              if (timeVal && !result.checkOutTime) result.checkOutTime = timeVal;
+            }
           }
           if (/(children|infants?|어린이|유아|儿童|婴儿)/i.test(combined)) {
             if (!result.childPolicy.includes(combined)) {
@@ -290,22 +313,39 @@ export function extractStructuredPdpFromJson(
       }
     }
 
-    // 7. Photo Tour (loại bỏ icon hệ thống AirbnbPlatformAssets)
-    if (idUpper.includes('PHOTO') || Array.isArray(sectionObj.mediaItems)) {
-      for (const m of sectionObj.mediaItems || []) {
-        const u = String(m?.baseUrl || m?.url || '');
-        if (
-          /muscache\.com\/im\/pictures\//i.test(u) &&
-          !/user|AirbnbPlatformAssets|search-bar-icons|orthographic-images/i.test(u)
-        ) {
-          photoSet.add(u.replace(/im_w=\d+/i, 'im_w=1200'));
+    // 7. Photo Tour (PHOTO_TOUR_SCROLLABLE_MODAL / HERO_DEFAULT — đệ quy tìm mọi mediaItem trong section, lọc ảnh nhỏ width < 400 & icon hệ thống)
+    if (
+      idUpper.includes('PHOTO') ||
+      idUpper.includes('HERO') ||
+      Array.isArray(sectionObj.mediaItems) ||
+      Array.isArray(sectionObj.previewImages)
+    ) {
+      const walkPhotos = (obj: any, depth = 0) => {
+        if (!obj || typeof obj !== 'object' || depth > 8) return;
+        if (Array.isArray(obj)) {
+          for (const el of obj) walkPhotos(el, depth + 1);
+          return;
         }
-      }
+        const w = Number(obj.width || obj.aspectRatioWidth || 0);
+        const rawUrl = obj.originalUrl || obj.baseUrl || obj.pictureUrl || obj.url;
+        if (typeof rawUrl === 'string' && !(w > 0 && w < 400)) {
+          if (
+            /muscache\.com\/im\/pictures\//i.test(rawUrl) &&
+            !/user|avatar|AirbnbPlatformAssets|search-bar-icons|orthographic-images/i.test(rawUrl)
+          ) {
+            photoSet.add(rawUrl.replace(/im_w=\d+/i, 'im_w=1200'));
+          }
+        }
+        for (const v of Object.values(obj)) {
+          if (v && typeof v === 'object') walkPhotos(v, depth + 1);
+        }
+      };
+      walkPhotos(sectionObj, 0);
     }
   };
 
   const walk = (node: any, depth = 0) => {
-    if (!node || typeof node !== 'object' || depth > 14) return;
+    if (!node || typeof node !== 'object' || depth > 25) return;
     if (Array.isArray(node)) {
       for (const item of node) walk(item, depth + 1);
       return;
@@ -319,6 +359,19 @@ export function extractStructuredPdpFromJson(
     }
     if (typeof node.title === 'string' && !result.title && node.__typename === 'PdpTitleSection') {
       result.title = normalizeUnicodeSpaces(node.title);
+    }
+
+    // Bắt trực tiếp mọi URL ảnh phòng chất lượng cao trong JSON (hosting / miso / prohost)
+    const rawPhotoUrl = node.originalUrl || node.baseUrl || node.pictureUrl;
+    if (typeof rawPhotoUrl === 'string') {
+      const w = Number(node.width || node.aspectRatioWidth || 0);
+      if (
+        !(w > 0 && w < 400) &&
+        /muscache\.com\/im\/pictures\/(?:hosting|miso|prohost|lombard)/i.test(rawPhotoUrl) &&
+        !/user|avatar|AirbnbPlatformAssets|search-bar-icons|orthographic-images/i.test(rawPhotoUrl)
+      ) {
+        photoSet.add(rawPhotoUrl.replace(/im_w=\d+/i, 'im_w=1200'));
+      }
     }
 
     for (const v of Object.values(node)) {

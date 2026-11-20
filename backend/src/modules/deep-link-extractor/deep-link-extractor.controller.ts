@@ -49,6 +49,9 @@ export class DeepLinkExtractorController {
       proxyUrl: body?.proxyUrl ? String(body.proxyUrl).trim() : undefined,
       useWarpProxy: Boolean(body?.useWarpProxy),
       humanLikeMode: body?.humanLikeMode !== false,
+      aiProvider: body?.aiProvider || 'gemini',
+      aiApiKey: body?.aiApiKey ? String(body.aiApiKey).trim() : undefined,
+      enableAiEnrichment: body?.enableAiEnrichment !== false,
     });
 
     return { jobId: job.jobId, status: job.status };

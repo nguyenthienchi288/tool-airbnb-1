@@ -174,6 +174,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         address_note TEXT DEFAULT '',
         updated_at TEXT DEFAULT ''
       );
+
+      CREATE TABLE IF NOT EXISTS tab2_room_cache (
+        listing_id TEXT PRIMARY KEY,
+        job_url_hash TEXT DEFAULT '',
+        room_json TEXT NOT NULL,
+        is_complete INTEGER DEFAULT 1,
+        updated_at TEXT DEFAULT ''
+      );
     `);
   }
 
@@ -192,6 +200,46 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.ensureOpen();
     const rows: any[] = this.db.prepare(`SELECT listing_id FROM listings`).all();
     return new Set(rows.map((r) => String(r.listing_id)));
+  }
+
+  upsertTab2RoomCache(listingId: string, urlHash: string, roomJson: string, isComplete: boolean) {
+    this.ensureOpen();
+    this.db
+      .prepare(
+        `
+        INSERT INTO tab2_room_cache (listing_id, job_url_hash, room_json, is_complete, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(listing_id) DO UPDATE SET
+          job_url_hash = excluded.job_url_hash,
+          room_json = excluded.room_json,
+          is_complete = excluded.is_complete,
+          updated_at = excluded.updated_at
+        `,
+      )
+      .run(listingId, urlHash, roomJson, isComplete ? 1 : 0, new Date().toISOString());
+  }
+
+  getTab2CachedRooms(listingIds: string[]): Map<string, { room: any; isComplete: boolean }> {
+    this.ensureOpen();
+    const out = new Map<string, { room: any; isComplete: boolean }>();
+    if (listingIds.length === 0) return out;
+    const stmt = this.db.prepare(
+      `SELECT listing_id, room_json, is_complete FROM tab2_room_cache WHERE listing_id = ?`,
+    );
+    for (const id of listingIds) {
+      const row: any = stmt.get(id);
+      if (row && row.room_json) {
+        try {
+          out.set(String(row.listing_id), {
+            room: JSON.parse(row.room_json),
+            isComplete: Number(row.is_complete) === 1,
+          });
+        } catch {
+          // Ignore malformed cache
+        }
+      }
+    }
+    return out;
   }
 
   getCompletedRoomIds(): Set<string> {

@@ -134,6 +134,8 @@ export interface SevenNightsHostRow {
 
 export interface SevenNightsRoomRow {
   'Room code': string;
+  'Airbnb Room ID': string;
+  'Room URL': string;
   'building name': string;
   'Building code': string;
   'Host name': string;
@@ -165,6 +167,8 @@ export interface SevenNightsPreviewData {
   rooms: SevenNightsRoomRow[];
 }
 
+export type AiProviderType = 'gemini' | 'openai' | 'none';
+
 export interface DeepExtractJobInput {
   url: string;
   downloadPhotos: boolean;
@@ -172,6 +176,9 @@ export interface DeepExtractJobInput {
   proxyUrl?: string;
   useWarpProxy?: boolean;
   humanLikeMode?: boolean;
+  aiProvider?: AiProviderType;
+  aiApiKey?: string;
+  enableAiEnrichment?: boolean;
 }
 
 export interface DeepExtractBundleResult {
