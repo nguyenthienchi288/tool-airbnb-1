@@ -8,6 +8,7 @@ import { ExporterModule } from './modules/exporter/exporter.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { ParserModule } from './modules/parser/parser.module';
 import { ScraperModule } from './modules/scraper/scraper.module';
+import { SevenNightsModule } from './lark/seven-nights/seven-nights.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ScraperModule } from './modules/scraper/scraper.module';
     BuildingsModule,
     JobsModule,
     DeepLinkExtractorModule,
+    SevenNightsModule,
   ],
   controllers: [AppController],
 })

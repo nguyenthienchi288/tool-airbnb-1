@@ -7,6 +7,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/lark-7nights': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,

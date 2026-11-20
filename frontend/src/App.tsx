@@ -19,6 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DeepLinkExtractorTab } from './components/DeepLinkExtractorTab';
 import { Header } from './components/Header';
+import { LarkSevenNightsTab } from './components/LarkSevenNightsTab';
 import { LiveConsole } from './components/LiveConsole';
 import {
   HeartbeatPayload,
@@ -611,14 +612,14 @@ export function App() {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalRooms / 50));
-  const [activeMainTab, setActiveMainTab] = useState<'market' | 'deep_link'>('market');
+  const [activeMainTab, setActiveMainTab] = useState<'market' | 'deep_link' | 'lark_sync'>('market');
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <Header versionInfo={versionInfo} connected={connected} />
 
       <main className="mx-auto max-w-[1500px] space-y-5 px-4 py-5 sm:px-6">
-        {/* Thanh chuyển đổi 2 Tab lớn */}
+        {/* Thanh chuyển đổi chế độ chính */}
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/80 p-2 shadow-lg">
           <button
             type="button"
@@ -642,10 +643,25 @@ export function App() {
           >
             <span>🎯 Trích Xuất Chi Tiết Từ Link (Chuẩn 7Nights Global)</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveMainTab('lark_sync')}
+            className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition ${
+              activeMainTab === 'lark_sync'
+                ? 'bg-gradient-to-r from-blue-500 to-sky-500 text-white shadow-md shadow-sky-500/20'
+                : 'text-slate-300 hover:bg-slate-800/80'
+            }`}
+          >
+            <span>🚀 Đồng Bộ Lark Base (7Nights)</span>
+          </button>
         </div>
 
         <div className={activeMainTab === 'deep_link' ? '' : 'hidden'}>
           <DeepLinkExtractorTab />
+        </div>
+
+        <div className={activeMainTab === 'lark_sync' ? '' : 'hidden'}>
+          <LarkSevenNightsTab />
         </div>
 
         <div className={activeMainTab === 'market' ? 'space-y-5' : 'hidden'}>

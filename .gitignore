@@ -1,30 +1,45 @@
-# Nestjs specific
-/dist
-/node_modules
-/build
-/tmp
+# ==========================================
+# 1. Dependencies & Build Outputs (Mọi cấp thư mục)
+# ==========================================
+node_modules/
+dist/
+dist-ssr/
+build/
+.next/
+out/
+.vite/
+.turbo/
+.cache/
+*.tsbuildinfo
 
-# Logs
-logs
+# ==========================================
+# 2. Environment Variables (Bảo mật Key/Token)
+# ==========================================
+.env
+.env.*
+!.env.example
+!.env.development.example
+!.env.test.example
+!.env.production.example
+
+# ==========================================
+# 3. Logs & Runtime Temp Files
+# ==========================================
+logs/
 *.log
 npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+.temp/
+.tmp/
+tmp/
+temp/
 
-# dotenv environment variable files
-.env*
-!.env.example
-!.env.development.example
-!.env.test.example
-!.env.production.example
-
-# temp directory
-.temp
-.tmp
-
-# Local service-account credentials
+# ==========================================
+# 4. Local Credentials & Secrets
+# ==========================================
 *firebase-adminsdk*.json
 service-account*.json
 *-service-account*.json
@@ -35,17 +50,38 @@ service-account*.json
 *.pfx
 secrets/
 credentials/
-
-# Legacy API collection: review for credentials before tracking.
 posman.json
 
-# Ignore runtime data, browser profiles and output files
-output/
-data/chrome_vpn_profile/
-data/chrome_tab2_isolated/
-data/*.db
-data/*.db-wal
-data/*.db-shm
-
+# ==========================================
+# 5. Scraper Data, SQLite DB & Browser Profiles
+# ==========================================
 output/
 data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ==========================================
+# 6. Testing & Coverage
+# ==========================================
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# ==========================================
+# 7. OS & IDE Files
+# ==========================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
