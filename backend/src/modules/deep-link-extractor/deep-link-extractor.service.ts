@@ -85,6 +85,8 @@ class ContextRecreatedError extends Error {
 @Injectable()
 export class DeepLinkExtractorService {
   private readonly jobs = new Map<string, DeepJobState>();
+  private keptBrowser: Browser | null = null;
+  private keptContext: BrowserContext | null = null;
 
   constructor(
     private readonly appConfig: AppConfigService,
@@ -94,6 +96,17 @@ export class DeepLinkExtractorService {
     private readonly hostParser: HostParserService,
     private readonly aiEnrichment: AiEnrichmentService,
   ) {}
+
+  async closeKeptBrowser() {
+    if (this.keptContext) {
+      await this.keptContext.close().catch(() => {});
+      this.keptContext = null;
+    }
+    if (this.keptBrowser) {
+      await this.keptBrowser.close().catch(() => {});
+      this.keptBrowser = null;
+    }
+  }
 
   parseUrl(rawUrl: string): ParsedAirbnbUrl {
     return parseAirbnbSearchUrl(rawUrl);
@@ -415,7 +428,7 @@ export class DeepLinkExtractorService {
     }
   }
 
-  private parseHouseRulesDetails(text: string): {
+  private parseHouseRulesDetails(text: string, fallbackDescription = ''): {
     checkInTime: string;
     checkOutTime: string;
     childPolicy: string;
@@ -423,29 +436,43 @@ export class DeepLinkExtractorService {
     const lineSafe = (text || '').replace(/[\u202f\u00a0\u2009]/g, ' ');
     let checkInTime = '';
     let checkOutTime = '';
+    const childLines: string[] = [];
 
-    const checkInMatch = lineSafe.match(
-      /Check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?(?:\s*[-–~]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)?)/i,
-    );
-    if (checkInMatch) {
-      checkInTime = normalizeUnicodeSpaces(checkInMatch[1]);
+    for (const rawLine of lineSafe.split(/\r?\n/)) {
+      const line = normalizeUnicodeSpaces(rawLine);
+      if (!line) continue;
+
+      if (!checkInTime && /\d/.test(line) && /check-?in/i.test(line) && !/self\s+check-?in/i.test(line)) {
+        const m = line.match(
+          /check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?(?:\s*[-–~]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)?)/i,
+        );
+        if (m) checkInTime = normalizeUnicodeSpaces(m[1]);
+      }
+
+      if (!checkOutTime && /\d/.test(line) && /(?:check-?out|checkout|퇴실)/i.test(line)) {
+        const m = line.match(
+          /(?:check-?out|checkout|퇴실)(?:\s+before|\s+by|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)/i,
+        );
+        if (m) checkOutTime = normalizeUnicodeSpaces(m[1]);
+      }
+
+      if (/(children|infants?|어린이|유아|儿童|婴儿)/i.test(line) && line.length <= 120) {
+        if (!childLines.includes(line)) childLines.push(line);
+      }
     }
 
-    const checkOutMatch = lineSafe.match(
-      /(?:Check-?out|Checkout)(?:\s+before|\s+by|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)/i,
-    );
-    if (checkOutMatch) {
-      checkOutTime = normalizeUnicodeSpaces(checkOutMatch[1]);
+    if (!checkOutTime && fallbackDescription) {
+      const descOut = fallbackDescription
+        .replace(/[\u202f\u00a0\u2009]/g, ' ')
+        .match(/(?:check-?out|checkout)(?:\s+before|\s+by|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)/i);
+      if (descOut) checkOutTime = normalizeUnicodeSpaces(descOut[1]);
     }
 
-    let childPolicy = '';
-    if (/not suitable for (children|infants)/i.test(lineSafe)) {
-      childPolicy = 'Not suitable for infants/children';
-    } else if (/suitable for children/i.test(lineSafe) || /children welcome/i.test(lineSafe)) {
-      childPolicy = 'Suitable for children';
-    }
-
-    return { checkInTime, checkOutTime, childPolicy };
+    return {
+      checkInTime,
+      checkOutTime,
+      childPolicy: childLines.join('; '),
+    };
   }
 
   private async runPipeline(
@@ -453,6 +480,7 @@ export class DeepLinkExtractorService {
     parsed: ParsedAirbnbUrl,
     input: DeepExtractJobInput,
   ) {
+    await this.closeKeptBrowser();
     const warpProxy = input.useWarpProxy ? { server: 'socks5://127.0.0.1:40000' } : undefined;
     const proxyConfig = parseProxyUrl(input.proxyUrl) || warpProxy || this.appConfig.proxy;
 
@@ -598,10 +626,10 @@ export class DeepLinkExtractorService {
         windowId,
         bounds: {
           windowState: 'normal',
-          left: 60,
-          top: 40,
-          width: 1366,
-          height: 820,
+          left: 40,
+          top: 30,
+          width: 1400,
+          height: 850,
         },
       });
     } catch {
@@ -904,13 +932,54 @@ export class DeepLinkExtractorService {
                 await sleep(500);
               }
 
-              // 2. Bấm mở rộng "Show all amenities" (để kích hoạt JSON AMENITIES_DEFAULT đầy đủ)
+              // 2. Bấm mở rộng "Show all amenities" & đọc trực tiếp các mục có sẵn trong modal (loại bỏ Not included / gạch ngang)
+              const modalAvailableAmenities: string[] = [];
               const showAllAmenitiesBtn = page
                 .locator('[data-section-id="AMENITIES_DEFAULT"] button:has-text("Show all"), button:has-text("Hiển thị tất cả"), button:has-text("显示全部")')
                 .first();
               if ((await showAllAmenitiesBtn.count()) > 0 && (await showAllAmenitiesBtn.isVisible().catch(() => false))) {
                 await showAllAmenitiesBtn.click({ timeout: 3000 }).catch(() => {});
                 await sleep(2000);
+                const scrapedModalItems = await page
+                  .locator('[role="dialog"]')
+                  .first()
+                  .evaluate((dialog) => {
+                    const out: string[] = [];
+                    const sections = dialog.querySelectorAll('section, div[data-section-id]');
+                    const scanContainer = sections.length > 0 ? Array.from(sections) : [dialog];
+                    for (const sec of scanContainer) {
+                      const headingText = (sec.querySelector('h2, h3')?.textContent || '').toLowerCase();
+                      if (
+                        headingText.includes('not included') ||
+                        headingText.includes('unavailable') ||
+                        headingText.includes('không bao gồm') ||
+                        headingText.includes('포함되지 않음') ||
+                        headingText.includes('不包含')
+                      ) {
+                        continue;
+                      }
+                      const rows = sec.querySelectorAll('li, div[id*="row-title"]');
+                      for (const r of Array.from(rows)) {
+                        const style = window.getComputedStyle(r);
+                        if (style.textDecorationLine.includes('line-through')) continue;
+                        const txt = (r.textContent || '').trim();
+                        if (
+                          !txt ||
+                          txt.length > 90 ||
+                          /^(unavailable|not included):/i.test(txt)
+                        ) {
+                          continue;
+                        }
+                        out.push(txt);
+                      }
+                    }
+                    return out;
+                  })
+                  .catch(() => []);
+                for (const item of scrapedModalItems) {
+                  const clean = normalizeUnicodeSpaces(item);
+                  if (clean) modalAvailableAmenities.push(clean);
+                }
                 await page.keyboard.press('Escape').catch(() => {});
                 await sleep(500);
               }
@@ -990,17 +1059,21 @@ export class DeepLinkExtractorService {
                 .join('\n')
                 .trim();
 
-              // CHỈ dùng danh sách tiện nghi có available: true từ JSON gốc (không đoán mò HTML)
-              const strictAvailableAmenities =
-                structured.availableAmenities.length > 0
-                  ? structured.availableAmenities
-                  : baseRecord?.amenities || [];
+              // CHỈ dùng danh sách tiện nghi có available: true từ JSON gốc + modal đã lọc bỏ Not included
+              const strictAvailableAmenities = Array.from(
+                new Set([
+                  ...(structured.availableAmenities.length > 0
+                    ? structured.availableAmenities
+                    : baseRecord?.amenities || []),
+                  ...modalAvailableAmenities,
+                ]),
+              );
               const flags = this.extractAmenityFlags(
                 strictAvailableAmenities,
                 fullDescription,
                 houseRulesText,
               );
-              const rulesParsed = this.parseHouseRulesDetails(houseRulesText);
+              const rulesParsed = this.parseHouseRulesDetails(houseRulesText, fullDescription);
               const finalCheckInTime = normalizeUnicodeSpaces(
                 structured.checkInTime || rulesParsed.checkInTime || '',
               );
@@ -1189,19 +1262,33 @@ export class DeepLinkExtractorService {
         'step',
       );
     } finally {
-      await this.browserService.forceClose();
-      await context.close().catch(() => {});
-      await browser?.close().catch(() => {});
+      if (input.keepBrowserOpen && !job.isStopRequested) {
+        this.keptBrowser = browser;
+        this.keptContext = context;
+        await page.goto(parsed.originalUrl, { timeout: 30000, waitUntil: 'commit' }).catch(() => {});
+        await page.bringToFront().catch(() => {});
+        this.pushLog(
+          job,
+          '[Chrome Kiểm Tra Trực Tiếp] Giữ nguyên cửa sổ Chrome for Testing mở để bạn đối chiếu trực tiếp!',
+          'step',
+        );
+      } else {
+        await this.browserService.forceClose();
+        await context.close().catch(() => {});
+        await browser?.close().catch(() => {});
+      }
       job.activeBrowser = undefined;
     }
 
     // =======================================================================
-    // BƯỚC 2.5: Hybrid AI Enrichment (Gemini / ChatGPT) & Fallback Regex/Geo
+    // BƯỚC 2.5: OpenAI ChatGPT (gpt-4o / gpt-4o-mini) Enrichment & Fallback
     // =======================================================================
+    let aiCopyPrompt = '';
     if (extractedRooms.length > 0) {
-      const { provider, apiKey } = this.aiEnrichment.resolveProviderAndKey(
+      const { provider, apiKey, model } = this.aiEnrichment.resolveOpenAiConfig(
         input.aiProvider,
         input.aiApiKey,
+        input.aiModel,
         input.enableAiEnrichment !== false,
       );
 
@@ -1217,17 +1304,23 @@ export class DeepLinkExtractorService {
           : null;
       const baseReverseGeo = await reverseGeocodeCoords(centerLat, centerLng);
 
-      if (provider !== 'none' && apiKey) {
-        const providerLabel = provider === 'gemini' ? 'Gemini' : 'ChatGPT';
+      aiCopyPrompt = this.aiEnrichment.buildManualChatGptPrompt({
+        rooms: extractedRooms,
+        reverseGeoAddress: baseReverseGeo?.address,
+        centerLat,
+        centerLng,
+      });
+
+      if (provider === 'openai' && apiKey) {
         this.pushProgress(
           job,
           88,
-          `Bước 2.5/3: Đang chuẩn hóa dữ liệu bằng AI (${providerLabel})...`,
+          `Bước 2.5/3: Đang chuẩn hóa dữ liệu bằng OpenAI ChatGPT (${model})...`,
         );
 
         const aiBuilding = await this.aiEnrichment.enrichBuildingCluster({
-          provider,
           apiKey,
+          model,
           rooms: extractedRooms,
           reverseGeoAddress: baseReverseGeo?.address,
           centerLat,
@@ -1235,8 +1328,8 @@ export class DeepLinkExtractorService {
         });
 
         const aiRoomsMap = await this.aiEnrichment.enrichRoomsBatch({
-          provider,
           apiKey,
+          model,
           rooms: extractedRooms,
         });
 
@@ -1279,7 +1372,7 @@ export class DeepLinkExtractorService {
 
         this.pushLog(
           job,
-          `[AI Enrichment - ${providerLabel}] Đã chuẩn hóa tòa nhà: ${aiBuilding?.building_name || extractedRooms[0].buildingName || 'N/A'} | Gym fee: ${aiBuilding?.gym_fee || 'N/A'} | Đã bổ sung Child policy & Mã căn.`,
+          `[AI Enrichment - ChatGPT ${model}] Đã chuẩn hóa tòa nhà: ${aiBuilding?.building_name || extractedRooms[0].buildingName || 'N/A'} | Gym fee: ${aiBuilding?.gym_fee || 'N/A'} | Đã bổ sung Child policy & Mã căn.`,
           'success',
         );
       } else {
@@ -1347,6 +1440,8 @@ export class DeepLinkExtractorService {
       totalFound: candidateMap.size,
       totalExtracted: extractedRooms.length,
       stoppedEarly: job.isStopRequested,
+      browserKeptOpen: Boolean(input.keepBrowserOpen && !job.isStopRequested),
+      aiCopyPrompt,
     };
 
     job.result = result;

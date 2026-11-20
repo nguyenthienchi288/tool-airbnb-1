@@ -167,7 +167,8 @@ export interface SevenNightsPreviewData {
   rooms: SevenNightsRoomRow[];
 }
 
-export type AiProviderType = 'gemini' | 'openai' | 'none';
+export type AiProviderType = 'openai' | 'none';
+export type OpenAiModelType = 'gpt-4o' | 'gpt-4o-mini';
 
 export interface DeepExtractJobInput {
   url: string;
@@ -177,8 +178,10 @@ export interface DeepExtractJobInput {
   useWarpProxy?: boolean;
   humanLikeMode?: boolean;
   aiProvider?: AiProviderType;
+  aiModel?: OpenAiModelType;
   aiApiKey?: string;
   enableAiEnrichment?: boolean;
+  keepBrowserOpen?: boolean;
 }
 
 export interface DeepExtractBundleResult {
@@ -192,5 +195,7 @@ export interface DeepExtractBundleResult {
   totalExtracted: number;
   totalPhotosDownloaded: number;
   stoppedEarly?: boolean;
+  browserKeptOpen?: boolean;
+  aiCopyPrompt?: string;
   preview: SevenNightsPreviewData;
 }

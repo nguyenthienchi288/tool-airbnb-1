@@ -6,7 +6,7 @@ export declare class JobsController {
     getActiveJob(): {
         activeJob: {
             jobId: string;
-            status: "running" | "completed" | "stopped" | "error";
+            status: "error" | "running" | "completed" | "stopped";
             percent: number;
             label: string;
             createdAt: string;
@@ -15,16 +15,16 @@ export declare class JobsController {
     };
     startJob(body: any): {
         jobId: string;
-        status: "running" | "completed" | "stopped" | "error";
+        status: "error" | "running" | "completed" | "stopped";
     };
     streamJob(jobId: string, req: Request, res: Response): void;
     stopActiveJob(): Promise<{
         jobId: string;
-        status: "running" | "completed" | "stopped" | "error";
+        status: "error" | "running" | "completed" | "stopped";
     }>;
     stopJob(jobId: string): Promise<{
         jobId: string;
-        status: "running" | "completed" | "stopped" | "error";
+        status: "error" | "running" | "completed" | "stopped";
     }>;
     pauseActiveJob(body?: {
         jobId?: string;

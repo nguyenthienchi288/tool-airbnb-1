@@ -1,6 +1,6 @@
 export const APP_VERSION =
-  'v4.4.0 - Tab 2 Deterministic Sync & Hybrid AI Enrichment (Gemini/ChatGPT)';
-export const SHORT_VERSION = 'v4.4.0';
+  'v4.5.0 - Tab 2 Visible Chrome for Testing, Strict Link Sync & OpenAI GPT-4o Verification';
+export const SHORT_VERSION = 'v4.5.0';
 
 export const AIRBNB_BASE_URL = 'https://www.airbnb.com.vn';
 export const AIRBNB_API_KEY = 'd306zoyjsyarp7ifhu67rjxn52tv0t20';

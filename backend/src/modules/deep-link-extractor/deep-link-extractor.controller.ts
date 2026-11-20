@@ -49,9 +49,11 @@ export class DeepLinkExtractorController {
       proxyUrl: body?.proxyUrl ? String(body.proxyUrl).trim() : undefined,
       useWarpProxy: Boolean(body?.useWarpProxy),
       humanLikeMode: body?.humanLikeMode !== false,
-      aiProvider: body?.aiProvider || 'gemini',
+      aiProvider: body?.aiProvider === 'none' ? 'none' : 'openai',
+      aiModel: body?.aiModel === 'gpt-4o-mini' ? 'gpt-4o-mini' : 'gpt-4o',
       aiApiKey: body?.aiApiKey ? String(body.aiApiKey).trim() : undefined,
       enableAiEnrichment: body?.enableAiEnrichment !== false,
+      keepBrowserOpen: Boolean(body?.keepBrowserOpen),
     });
 
     return { jobId: job.jobId, status: job.status };
@@ -131,6 +133,12 @@ export class DeepLinkExtractorController {
     const job = await this.extractor.updateProxy(body?.proxyUrl, body?.jobId);
     if (!job) throw new NotFoundException('Không có tiến trình nào đang chạy.');
     return { jobId: job.jobId, pauseState: job.pauseState };
+  }
+
+  @Post('close-browser')
+  async closeKeptBrowser() {
+    await this.extractor.closeKeptBrowser();
+    return { ok: true };
   }
 
   @Get('download-file/:bundleName/:fileName')

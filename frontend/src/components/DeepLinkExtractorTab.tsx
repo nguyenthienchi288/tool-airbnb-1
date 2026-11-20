@@ -1,8 +1,11 @@
 import {
   Archive,
   Building2,
+  Check,
+  Copy,
   Download,
   FileSpreadsheet,
+  Globe,
   Home,
   Link2,
   MapPin,
@@ -79,6 +82,8 @@ interface BundleResult {
   totalFound: number;
   totalExtracted: number;
   totalPhotosDownloaded: number;
+  browserKeptOpen?: boolean;
+  aiCopyPrompt?: string;
 }
 
 export function DeepLinkExtractorTab() {
@@ -88,12 +93,18 @@ export function DeepLinkExtractorTab() {
   const [strictBoundsOnly, setStrictBoundsOnly] = useState(true);
   const [proxyUrl, setProxyUrl] = useState('');
   const [useWarpProxy, setUseWarpProxy] = useState(false);
-  const [aiProvider, setAiProvider] = useState<'gemini' | 'openai' | 'none'>(() => {
+  const [aiProvider, setAiProvider] = useState<'openai' | 'none'>(() => {
     const saved = localStorage.getItem('tab2_ai_provider');
-    return saved === 'openai' || saved === 'none' ? saved : 'gemini';
+    return saved === 'none' ? 'none' : 'openai';
+  });
+  const [aiModel, setAiModel] = useState<'gpt-4o' | 'gpt-4o-mini'>(() => {
+    const saved = localStorage.getItem('tab2_ai_model');
+    return saved === 'gpt-4o-mini' ? 'gpt-4o-mini' : 'gpt-4o';
   });
   const [aiApiKey, setAiApiKey] = useState(() => localStorage.getItem('tab2_ai_api_key') || '');
   const [enableAiEnrichment, setEnableAiEnrichment] = useState(true);
+  const [keepBrowserOpen, setKeepBrowserOpen] = useState(false);
+  const [copiedAiPrompt, setCopiedAiPrompt] = useState(false);
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'running' | 'completed' | 'stopped' | 'error'>('idle');
@@ -209,8 +220,10 @@ export function DeepLinkExtractorTab() {
           useWarpProxy,
           humanLikeMode: true,
           aiProvider,
+          aiModel,
           aiApiKey: aiApiKey.trim() || undefined,
           enableAiEnrichment,
+          keepBrowserOpen,
         }),
       });
       const data = await res.json();
@@ -284,6 +297,34 @@ export function DeepLinkExtractorTab() {
                   <Archive className="h-3.5 w-3.5" />
                   <span>Tải trọn bộ thư mục dữ liệu &amp; ảnh (.zip)</span>
                 </a>
+                {result.aiCopyPrompt && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(result.aiCopyPrompt || '').catch(() => {});
+                      setCopiedAiPrompt(true);
+                      setTimeout(() => setCopiedAiPrompt(false), 2500);
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl border border-violet-500/40 bg-violet-500/15 px-3.5 py-2 text-xs font-semibold text-violet-300 hover:bg-violet-500/25"
+                  >
+                    {copiedAiPrompt ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    <span>
+                      {copiedAiPrompt
+                        ? 'Đã Copy Dữ liệu cho ChatGPT!'
+                        : 'Copy Dữ Liệu Thô Để Dán Kiểm Tra Nhanh Trên ChatGPT Web'}
+                    </span>
+                  </button>
+                )}
+                {result.browserKeptOpen && (
+                  <button
+                    type="button"
+                    onClick={() => void fetch('/api/deep-extract/close-browser', { method: 'POST' })}
+                    className="flex items-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-500/25"
+                  >
+                    <Globe className="h-3.5 w-3.5" />
+                    <span>Đóng Chrome Kiểm Tra</span>
+                  </button>
+                )}
               </>
             )}
 
@@ -367,36 +408,52 @@ export function DeepLinkExtractorTab() {
           />
         </div>
 
-        {/* Trợ lý AI Chuẩn hóa Dữ liệu (Gemini / ChatGPT) */}
+        {/* Trợ lý AI OpenAI ChatGPT (gpt-4o / gpt-4o-mini) & Chế độ Chrome Kiểm Tra Trực Tiếp */}
         <div className="space-y-2 rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="text-xs font-bold text-indigo-300">
-              Trợ lý AI Chuẩn hóa Dữ liệu (Gemini / ChatGPT)
+              Trợ lý AI OpenAI ChatGPT (gpt-4o / gpt-4o-mini) &amp; Kiểm Tra Trực Tiếp
             </span>
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-200">
-              <input
-                type="checkbox"
-                checked={enableAiEnrichment}
-                onChange={(e) => setEnableAiEnrichment(e.target.checked)}
-                className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500"
-              />
-              <span>
-                Bật AI chuẩn hóa các trường thiếu/mơ hồ (Building, Address, Gym fee, Child policy, Mã căn)
-              </span>
-            </label>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={enableAiEnrichment}
+                  onChange={(e) => setEnableAiEnrichment(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500"
+                />
+                <span>Bật ChatGPT chuẩn hóa các trường thiếu/mơ hồ</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-amber-200">
+                <input
+                  type="checkbox"
+                  checked={keepBrowserOpen}
+                  onChange={(e) => setKeepBrowserOpen(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-amber-500"
+                />
+                <span>Giữ cửa sổ Chrome mở sau khi cào để kiểm tra trực tiếp</span>
+              </label>
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <select
-              value={aiProvider}
+              value={aiProvider === 'none' ? 'none' : aiModel}
               onChange={(e) => {
-                const v = e.target.value as 'gemini' | 'openai' | 'none';
-                setAiProvider(v);
-                localStorage.setItem('tab2_ai_provider', v);
+                const v = e.target.value;
+                if (v === 'none') {
+                  setAiProvider('none');
+                  localStorage.setItem('tab2_ai_provider', 'none');
+                } else {
+                  setAiProvider('openai');
+                  setAiModel(v as 'gpt-4o' | 'gpt-4o-mini');
+                  localStorage.setItem('tab2_ai_provider', 'openai');
+                  localStorage.setItem('tab2_ai_model', v);
+                }
               }}
               className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
             >
-              <option value="gemini">Google Gemini (gemini-2.5-flash)</option>
-              <option value="openai">OpenAI ChatGPT (gpt-4o-mini)</option>
+              <option value="gpt-4o">OpenAI ChatGPT (gpt-4o)</option>
+              <option value="gpt-4o-mini">OpenAI ChatGPT (gpt-4o-mini)</option>
               <option value="none">Tắt AI (Chỉ dùng Parser &amp; Regex)</option>
             </select>
             <input
@@ -406,7 +463,7 @@ export function DeepLinkExtractorTab() {
                 setAiApiKey(e.target.value);
                 localStorage.setItem('tab2_ai_api_key', e.target.value);
               }}
-              placeholder="API Key (để trống nếu đã cấu hình trong .env)"
+              placeholder="OpenAI API Key sk-... (để trống nếu đã cấu hình trong .env)"
               className="sm:col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white placeholder-slate-500"
             />
           </div>

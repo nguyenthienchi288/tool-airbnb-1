@@ -10,14 +10,14 @@ export declare class DeepLinkExtractorController {
     }): import("./types").ParsedAirbnbUrl;
     start(body: any): {
         jobId: string;
-        status: "running" | "completed" | "stopped" | "error";
+        status: "error" | "running" | "completed" | "stopped";
     };
     stream(jobId: string, req: Request, res: Response): void;
     stop(body?: {
         jobId?: string;
     }): Promise<{
         jobId: string;
-        status: "running" | "completed" | "stopped" | "error";
+        status: "error" | "running" | "completed" | "stopped";
     }>;
     pause(body?: {
         jobId?: string;
@@ -61,6 +61,9 @@ export declare class DeepLinkExtractorController {
             countdownSeconds: number;
             reason?: string;
         };
+    }>;
+    closeKeptBrowser(): Promise<{
+        ok: boolean;
     }>;
     downloadBundleFile(bundleName: string, fileName: string, res: Response): void;
     downloadBundleZip(zipFileName: string, res: Response): void;
