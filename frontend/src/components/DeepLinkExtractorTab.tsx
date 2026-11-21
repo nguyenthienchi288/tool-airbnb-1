@@ -104,7 +104,11 @@ export function DeepLinkExtractorTab() {
   const [aiApiKey, setAiApiKey] = useState(() => localStorage.getItem('tab2_ai_api_key') || '');
   const [enableAiEnrichment, setEnableAiEnrichment] = useState(true);
   const [keepBrowserOpen, setKeepBrowserOpen] = useState(false);
+  const [ignoreCache, setIgnoreCache] = useState(true);
   const [copiedAiPrompt, setCopiedAiPrompt] = useState(false);
+  const [manualAiJson, setManualAiJson] = useState('');
+  const [isApplyingAiJson, setIsApplyingAiJson] = useState(false);
+  const [applySuccessMsg, setApplySuccessMsg] = useState<string | null>(null);
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'running' | 'completed' | 'stopped' | 'error'>('idle');
@@ -224,6 +228,7 @@ export function DeepLinkExtractorTab() {
           aiApiKey: aiApiKey.trim() || undefined,
           enableAiEnrichment,
           keepBrowserOpen,
+          ignoreCache,
         }),
       });
       const data = await res.json();
@@ -356,7 +361,10 @@ export function DeepLinkExtractorTab() {
             <input
               type="text"
               value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
+              onChange={(e) => {
+                setUrlInput(e.target.value);
+                setIgnoreCache(true);
+              }}
               placeholder="Dán URL tìm kiếm Airbnb (airbnb.cn, airbnb.com, airbnb.com.vn kèm tọa độ ne_lat, sw_lat...)"
               className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
             />
@@ -390,6 +398,37 @@ export function DeepLinkExtractorTab() {
             />
             <span>Chỉ lấy căn nằm gọn trong khung tọa độ bản đồ</span>
           </label>
+          <label className="flex cursor-pointer items-center gap-2 text-amber-200">
+            <input
+              type="checkbox"
+              checked={ignoreCache}
+              onChange={(e) => setIgnoreCache(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-amber-500"
+            />
+            <span>Bỏ qua Cache — Cào mới 100% từ đầu</span>
+          </label>
+          <button
+            type="button"
+            onClick={async () => {
+              if (status === 'running') {
+                await callAction('reset-session');
+              } else {
+                await fetch('/api/deep-extract/clear-cache', { method: 'POST' }).catch(() => null);
+                setLogs((prev) => [
+                  ...prev,
+                  {
+                    timestamp: new Date().toLocaleTimeString('vi-VN', { hour12: false }),
+                    level: 'info',
+                    message: '[Reset Session] Đã xóa sạch cache SQLite (tab2_room_cache).',
+                  },
+                ]);
+              }
+            }}
+            className="inline-flex items-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-[11px] font-semibold text-sky-300 hover:bg-sky-500/25"
+          >
+            <RefreshCw className="h-3 w-3" />
+            <span>Reset Session / Xóa Cache</span>
+          </button>
           <label className="flex cursor-pointer items-center gap-2">
             <input
               type="checkbox"
@@ -469,6 +508,78 @@ export function DeepLinkExtractorTab() {
           </div>
         </div>
 
+        {/* 1-Click AI Sync (Không cần API Key): Copy Dữ Liệu Thô & Dán JSON Kết Quả Từ ChatGPT/Gemini */}
+        {result?.aiCopyPrompt && (
+          <div className="space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-emerald-300">
+                AI Chuẩn Hóa Thủ Công Siêu Nhanh (1-Click Copy &amp; Paste JSON — Không cần API Key)
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(result.aiCopyPrompt || '').catch(() => {});
+                  setCopiedAiPrompt(true);
+                  setTimeout(() => setCopiedAiPrompt(false), 2500);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/15 px-3 py-1.5 text-xs font-semibold text-violet-300 hover:bg-violet-500/25"
+              >
+                {copiedAiPrompt ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>
+                  {copiedAiPrompt
+                    ? 'Đã Copy Dữ Liệu Thô!'
+                    : 'Copy Dữ Liệu Thô Để Hỏi ChatGPT / Gemini'}
+                </span>
+              </button>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <textarea
+                rows={3}
+                value={manualAiJson}
+                onChange={(e) => setManualAiJson(e.target.value)}
+                placeholder='Dán đoạn JSON kết quả từ ChatGPT / Gemini vào đây (VD: {"building_infor": {...}, "rooms": [...]})'
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 font-mono text-[11px] text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                disabled={isApplyingAiJson || !manualAiJson.trim() || !jobId}
+                onClick={async () => {
+                  if (!jobId || !manualAiJson.trim()) return;
+                  setIsApplyingAiJson(true);
+                  setErrorMsg(null);
+                  setApplySuccessMsg(null);
+                  try {
+                    const resp = await fetch('/api/deep-extract/apply-ai-json', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ jobId, aiJsonText: manualAiJson }),
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) {
+                      setErrorMsg(data?.message || 'Lỗi khi áp dụng JSON AI.');
+                      return;
+                    }
+                    if (data.result) setResult(data.result);
+                    if (data.preview) setPreview(data.preview);
+                    setApplySuccessMsg(data.message || 'Đã cập nhật & xuất lại Excel!');
+                  } catch (err: any) {
+                    setErrorMsg(err?.message || 'Lỗi kết nối Backend.');
+                  } finally {
+                    setIsApplyingAiJson(false);
+                  }
+                }}
+                className="shrink-0 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-xs font-bold text-white shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isApplyingAiJson
+                  ? 'Đang xuất lại Excel...'
+                  : '⚡ Áp Dụng & Xuất Lại File Excel 7Nights Global'}
+              </button>
+            </div>
+            {applySuccessMsg && (
+              <div className="text-xs font-semibold text-emerald-300">{applySuccessMsg}</div>
+            )}
+          </div>
+        )}
         {/* Hiển thị 5 nhóm thông tin giải mã từ URL */}
         {parsedInfo && (
           <div className="grid grid-cols-1 gap-3 pt-2 md:grid-cols-2 lg:grid-cols-5">

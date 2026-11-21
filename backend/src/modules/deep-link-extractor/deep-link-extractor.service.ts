@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
-import { Browser, BrowserContext, Page, Response } from 'playwright';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { exec } from 'child_process';
+import * as fs from 'fs';
+import { Browser, BrowserContext, chromium, Page, Response } from 'playwright';
 import { v4 as uuidv4 } from 'uuid';
 import { Response as ExpressResponse } from 'express';
 import {
@@ -33,7 +35,7 @@ import {
   ParsedAirbnbUrl,
   SevenNightsPreviewData,
 } from './types';
-import { checkBoundingBox, parseAirbnbSearchUrl } from './url-parser';
+import { checkBoundingBox, normalizeHostProfileUrl, parseAirbnbSearchUrl } from './url-parser';
 
 export interface DeepJobState {
   jobId: string;
@@ -42,6 +44,9 @@ export interface DeepJobState {
   label: string;
   logs: Array<{ timestamp: string; level: string; message: string }>;
   preview: SevenNightsPreviewData;
+  extractedRooms?: DeepExtractedRoom[];
+  parsedUrl?: ParsedAirbnbUrl;
+  input?: DeepExtractJobInput;
   result?: DeepExtractBundleResult;
   error?: string;
   abortController: AbortController;
@@ -108,6 +113,18 @@ export class DeepLinkExtractorService {
     }
   }
 
+  private forceWindowsChromeToFront() {
+    if (process.platform !== 'win32') return;
+    exec(
+      `powershell -NoProfile -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class Win32 { [DllImport(\\"user32.dll\\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\\"user32.dll\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); }'; Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.MainWindowTitle -like '*Airbnb*' -or $_.MainWindowTitle -like '*Chrome for Testing*' -or $_.ProcessName -eq 'chrome') } | ForEach-Object { [Win32]::ShowWindow($_.MainWindowHandle, 9); [Win32]::SetForegroundWindow($_.MainWindowHandle) }"`,
+      () => {},
+    );
+  }
+
+  clearCache() {
+    this.db.clearTab2RoomCache();
+  }
+
   parseUrl(rawUrl: string): ParsedAirbnbUrl {
     return parseAirbnbSearchUrl(rawUrl);
   }
@@ -171,6 +188,9 @@ export class DeepLinkExtractorService {
       label: 'Đang khởi chạy trình duyệt Single-Tab (Chế độ chính xác 100%)...',
       logs: [],
       preview: { buildings: [], hosts: [], rooms: [] },
+      extractedRooms: [],
+      parsedUrl: parsed,
+      input,
       abortController: new AbortController(),
       isStopRequested: false,
       clients: new Set(),
@@ -227,8 +247,11 @@ export class DeepLinkExtractorService {
   }
 
   async resetSession(jobId?: string) {
+    this.db.clearTab2RoomCache();
     const job = jobId ? this.jobs.get(jobId) : this.getActiveJob();
-    if (job && job.status === 'running') await job.handlers?.resetSession();
+    if (job && job.status === 'running') {
+      await job.handlers?.resetSession();
+    }
     return job;
   }
 
@@ -442,21 +465,21 @@ export class DeepLinkExtractorService {
       const line = normalizeUnicodeSpaces(rawLine);
       if (!line) continue;
 
-      if (!checkInTime && /\d/.test(line) && /check-?in/i.test(line) && !/self\s+check-?in/i.test(line)) {
+      if (!checkInTime && /\d/.test(line) && /(?:check-?in|after|입실|체크인|入住时间)/i.test(line) && !/self\s+check-?in/i.test(line)) {
         const m = line.match(
-          /check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?(?:\s*[-–~]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)?)/i,
+          /(?:check-?in|after|입실|체크인|入住时间)(?:\s+after|\s+from|\s+is|\s*:|：)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?(?:\s*[-–~]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)?)/i,
         );
         if (m) checkInTime = normalizeUnicodeSpaces(m[1]);
       }
 
-      if (!checkOutTime && /\d/.test(line) && /(?:check-?out|checkout|퇴실)/i.test(line)) {
+      if (!checkOutTime && /\d/.test(line) && /(?:check-?out|checkout|before|퇴실|체크아웃|退房时间)/i.test(line)) {
         const m = line.match(
-          /(?:check-?out|checkout|퇴실)(?:\s+before|\s+by|\s+is|\s*:)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)/i,
+          /(?:check-?out|checkout|before|퇴실|체크아웃|退房时间)(?:\s+before|\s+by|\s+is|\s*:|：)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)/i,
         );
         if (m) checkOutTime = normalizeUnicodeSpaces(m[1]);
       }
 
-      if (/(children|infants?|어린이|유아|儿童|婴儿)/i.test(line) && line.length <= 120) {
+      if (/(children|infants?|kids|어린이|유아|儿童|婴幼儿)/i.test(line) && line.length <= 140) {
         if (!childLines.includes(line)) childLines.push(line);
       }
     }
@@ -483,6 +506,13 @@ export class DeepLinkExtractorService {
     await this.closeKeptBrowser();
     const warpProxy = input.useWarpProxy ? { server: 'socks5://127.0.0.1:40000' } : undefined;
     const proxyConfig = parseProxyUrl(input.proxyUrl) || warpProxy || this.appConfig.proxy;
+
+    const execPath = chromium.executablePath();
+    if (!execPath || !fs.existsSync(execPath)) {
+      const msg = `[Browser Tab 2] Không tìm thấy Chrome for Testing tại: ${execPath || '(rỗng)'}. Hãy chạy "npx playwright install chromium" trong backend/.`;
+      this.pushLog(job, msg, 'error');
+      throw new Error(msg);
+    }
 
     this.pushLog(job, '[Browser Tab 2] Đang mở cửa sổ Chrome for Testing (headless: false)...', 'step');
     let launched: { context: BrowserContext; browser: Browser; channelUsed: string };
@@ -618,24 +648,29 @@ export class DeepLinkExtractorService {
     >();
 
     let page = await context.newPage();
-    await page.bringToFront().catch(() => {});
     try {
-      const cdp = await context.newCDPSession(page);
+      const cdp = await page.context().newCDPSession(page);
       const { windowId } = await cdp.send('Browser.getWindowForTarget');
       await cdp.send('Browser.setWindowBounds', {
         windowId,
         bounds: {
+          left: 60,
+          top: 40,
+          width: 1360,
+          height: 820,
           windowState: 'normal',
-          left: 40,
-          top: 30,
-          width: 1400,
-          height: 850,
         },
       });
     } catch {
       // Ignore if CDP window bounds unsupported
     }
-    this.pushLog(job, '[Browser Tab 2] Đã mở cửa sổ Chrome for Testing độc lập!', 'success');
+    await page.bringToFront().catch(() => {});
+    this.forceWindowsChromeToFront();
+    this.pushLog(
+      job,
+      `[Browser Tab 2] Đã kích hoạt nổi cửa sổ Chrome for Testing: ${execPath}`,
+      'success',
+    );
     let myGen = contextGeneration;
 
     try {
@@ -686,6 +721,7 @@ export class DeepLinkExtractorService {
       page.on('response', onSearchResp);
       await page.goto(parsed.originalUrl, { timeout: 60000, waitUntil: 'commit' });
       await page.bringToFront().catch(() => {});
+      this.forceWindowsChromeToFront();
       await randomDelay(3000, 4500);
 
       for (let p = 1; p <= 15; p++) {
@@ -796,22 +832,46 @@ export class DeepLinkExtractorService {
         'step',
       );
 
-      // Nạp checkpoint từ SQLite tab2_room_cache
-      const cachedMap = this.db.getTab2CachedRooms(candidates.map((c) => c.listingId));
+      // Nạp checkpoint từ SQLite tab2_room_cache (chỉ dùng khi không bật Bỏ qua Cache & đủ tính toàn vẹn ảnh/dữ liệu)
       const extractedById = new Map<string, DeepExtractedRoom>();
       const excludedOutsideIds = new Set<string>();
-      for (const cand of candidates) {
-        const cached = cachedMap.get(cand.listingId);
-        if (cached && cached.isComplete && cached.room) {
-          extractedById.set(cand.listingId, cached.room as DeepExtractedRoom);
-        }
-      }
-      if (extractedById.size > 0) {
+      if (input.ignoreCache) {
         this.pushLog(
           job,
-          `[Checkpoint SQLite] Đã khôi phục ${extractedById.size}/${candidates.length} căn hoàn chỉnh từ cache.`,
-          'info',
+          '[Bỏ qua Cache] Chế độ cào mới 100% từ đầu — Sẽ duyệt từng căn ở Bước 2 để lấy đủ dữ liệu & ảnh!',
+          'step',
         );
+      } else {
+        const cachedMap = this.db.getTab2CachedRooms(candidates.map((c) => c.listingId));
+        for (const cand of candidates) {
+          const cached = cachedMap.get(cand.listingId);
+          const cachedRoom = cached?.room as DeepExtractedRoom | undefined;
+          const hasPhotosIfNeeded =
+            !input.downloadPhotos || (Array.isArray(cachedRoom?.photoUrls) && cachedRoom.photoUrls.length > 0);
+          if (
+            cached &&
+            cached.isComplete &&
+            cachedRoom &&
+            cachedRoom.title &&
+            !/stay tuned/i.test(cachedRoom.title) &&
+            isValidHostName(cachedRoom.hostName) &&
+            hasPhotosIfNeeded
+          ) {
+            cachedRoom.hostAirbnbLink = normalizeHostProfileUrl(
+              cachedRoom.hostAirbnbLink,
+              parsed.platformLocation.origin,
+              cachedRoom.hostId,
+            );
+            extractedById.set(cand.listingId, cachedRoom);
+          }
+        }
+        if (extractedById.size > 0) {
+          this.pushLog(
+            job,
+            `[Checkpoint SQLite] Đã khôi phục ${extractedById.size}/${candidates.length} căn hoàn chỉnh từ cache.`,
+            'info',
+          );
+        }
       }
 
       // =====================================================================
@@ -893,6 +953,8 @@ export class DeepLinkExtractorService {
             page.on('response', onPdpResp);
             try {
               const nav = await page.goto(roomUrl, { timeout: 60000, waitUntil: 'commit' });
+              await page.bringToFront().catch(() => {});
+              this.forceWindowsChromeToFront();
               await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
               await randomDelay(4000, 5500);
               if (pdpBlock) throw pdpBlock;
@@ -1008,16 +1070,53 @@ export class DeepLinkExtractorService {
                 .catch(() => '');
               const houseRulesText = normalizeUnicodeSpaces(`${sectionRulesText}\n${modalRulesText}`);
 
-              // 4. Bấm mở Thư viện ảnh (Show all photos) để kích hoạt JSON PHOTO_TOUR_SCROLLABLE_MODAL
+              // 4. Bấm mở Thư viện ảnh (Show all photos) để kích hoạt JSON PHOTO_TOUR_SCROLLABLE_MODAL + Fallback DOM
+              const domFallbackPhotos = new Set<string>();
+              const collectDomPhotos = async () => {
+                const imgs = await page
+                  .locator('img[src*="muscache.com/im/pictures"]')
+                  .evaluateAll((els) => els.map((e) => e.getAttribute('src') || ''))
+                  .catch(() => []);
+                for (const u of imgs) {
+                  if (
+                    u &&
+                    !/\/users\/|user|avatar|AirbnbPlatformAssets|search-bar-icons|orthographic-images/i.test(u)
+                  ) {
+                    domFallbackPhotos.add(u.replace(/im_w=\d+/i, 'im_w=1200'));
+                  }
+                }
+              };
+              await collectDomPhotos();
               const showPhotosBtn = page
                 .locator('button:has-text("Show all photos"), button:has-text("Hiển thị tất cả ảnh"), button:has-text("显示所有照片")')
                 .first();
               if ((await showPhotosBtn.count()) > 0 && (await showPhotosBtn.isVisible().catch(() => false))) {
                 await showPhotosBtn.click({ timeout: 3000 }).catch(() => {});
                 await sleep(1800);
+                await collectDomPhotos();
                 await page.keyboard.press('Escape').catch(() => {});
                 await sleep(500);
               }
+
+              // 5. Lấy trực tiếp href thật từ thẻ link chủ nhà trên DOM (ưu tiên khối Meet your host)
+              const domHostLinkInfo = await page
+                .evaluate(() => {
+                  const selector = 'a[href*="/users/show/"], a[href*="/users/profile/"]';
+                  const meetSection =
+                    document.querySelector('[data-section-id="MEET_YOUR_HOST"]') ||
+                    Array.from(document.querySelectorAll('section, div[data-section-id]')).find((el) => {
+                      const heading = el.querySelector('h1, h2, h3')?.textContent || '';
+                      return /meet your host|gặp gỡ chủ nhà|认识房东|호스트/i.test(heading);
+                    });
+                  const preferredLink = meetSection?.querySelector<HTMLAnchorElement>(selector);
+                  const fallbackLink = document.querySelector<HTMLAnchorElement>(selector);
+                  const chosen = preferredLink || fallbackLink;
+                  if (!chosen) return { href: '', hostId: '' };
+                  const href = chosen.getAttribute('href') || chosen.href || '';
+                  const m = href.match(/\/users\/(?:show|profile)\/(\d+)/i);
+                  return { href, hostId: m?.[1] || '' };
+                })
+                .catch(() => ({ href: '', hostId: '' }));
 
               // Bóc tách dữ liệu PDP chuẩn + JSON gốc StaysPdpSections
               const structured = extractStructuredPdpFromJson(pdpJsonRoots);
@@ -1084,8 +1183,9 @@ export class DeepLinkExtractorService {
                 structured.childPolicy || rulesParsed.childPolicy || '',
               );
 
-              // Đọc tên Host chuẩn từ JSON hoặc truy cập thẳng /users/profile/{hostId} (cấm "Airbnb Host")
-              const hostId = structured.hostId || baseRecord?.host_id || '';
+              // Đọc tên Host chuẩn từ JSON hoặc truy cập thẳng /users/show/{hostId} (cấm "Airbnb Host")
+              const sourceOrigin = parsed.platformLocation.origin || 'https://www.airbnb.com';
+              const hostId = structured.hostId || baseRecord?.host_id || domHostLinkInfo.hostId || '';
               let hostName = isValidHostName(structured.hostName)
                 ? structured.hostName
                 : isValidHostName(baseRecord?.host_name || '')
@@ -1094,8 +1194,8 @@ export class DeepLinkExtractorService {
               let hostTotalListings = 1;
 
               if (hostId && !hostName) {
-                const profileUrl = `https://www.airbnb.com/users/profile/${hostId}?locale=en`;
-                await page.goto(profileUrl, { timeout: 45000, waitUntil: 'commit' }).catch(() => null);
+                const hostProfileFallbackUrl = `https://www.airbnb.com/users/profile/${hostId}?locale=en`;
+                await page.goto(hostProfileFallbackUrl, { timeout: 45000, waitUntil: 'commit' }).catch(() => null);
                 await randomDelay(3000, 4000);
                 const h1Host = await page
                   .locator('h1')
@@ -1110,7 +1210,7 @@ export class DeepLinkExtractorService {
                 }
               }
               if (hostId) {
-                const hostShowUrl = `https://www.airbnb.com/users/show/${hostId}?locale=en`;
+                const hostShowUrl = `https://www.airbnb.com/users/profile/${hostId}?locale=en`;
                 const hostRoomIds = await this.hostParser
                   .collectHostRoomIds(page, hostShowUrl)
                   .catch(() => []);
@@ -1137,17 +1237,23 @@ export class DeepLinkExtractorService {
                   `${rawTitle}\n${baseRecord?.subtitle || ''}\n${fullDescription}\n${hostName}`,
                 );
 
-              // Lấy 100% ảnh từ JSON gốc StaysPdpSections (PHOTO_TOUR_SCROLLABLE_MODAL / HERO_DEFAULT)
-              const finalPhotos = [...structured.photoUrls];
-
-              const city = parsed.platformLocation.cityGuess || 'Seoul';
-              const country = parsed.platformLocation.countryGuess || 'South Korea';
-              const address = structured.locationSubtitle || baseRecord?.location_text || '';
-              const district = this.extractDistrict(
-                address,
-                structured.locationSubtitle,
-                fullDescription,
+              // Kết hợp ảnh từ JSON gốc StaysPdpSections + Fallback DOM (đã lọc avatar/icon)
+              const finalPhotos = Array.from(
+                new Set([...structured.photoUrls, ...domFallbackPhotos]),
               );
+
+              const revGeo = await reverseGeocodeCoords(finalLat, finalLng).catch(() => null);
+              const city = revGeo?.city || parsed.platformLocation.cityGuess || 'Seoul';
+              const country = revGeo?.country || parsed.platformLocation.countryGuess || 'South Korea';
+              // Không dùng địa chỉ đường phố từ tọa độ bị lệch của Airbnb làm Address cuối; chỉ giữ district/city/country
+              const address = structured.locationSubtitle || baseRecord?.location_text || `${city}`;
+              const district =
+                revGeo?.district ||
+                this.extractDistrict(
+                  address,
+                  structured.locationSubtitle,
+                  fullDescription,
+                );
 
               const bedrooms = structured.bedrooms || baseRecord?.bedrooms || 0;
               const beds = Math.max(1, structured.beds || baseRecord?.beds || 1);
@@ -1195,7 +1301,7 @@ export class DeepLinkExtractorService {
                 localPhotoDir: '',
                 hostId,
                 hostName: hostName || `Host-${hostId || cand.listingId}`,
-                hostAirbnbLink: hostId ? `https://www.airbnb.com/users/profile/${hostId}` : '',
+                hostAirbnbLink: normalizeHostProfileUrl(domHostLinkInfo.href, sourceOrigin, hostId),
                 hostTotalListings,
               };
 
@@ -1393,30 +1499,43 @@ export class DeepLinkExtractorService {
         }
 
         if (dominantBuilding) {
-          const firstDist = extractedRooms.find((r) => r.district)?.district || '';
-          const firstCity = extractedRooms[0].city || 'Seoul';
-          const addrHit = await searchAddressByBuildingName(dominantBuilding, firstDist, firstCity);
+          const firstDist =
+            extractedRooms.find((r) => r.district)?.district || baseReverseGeo?.district || '';
+          const firstCity = extractedRooms[0].city || baseReverseGeo?.city || 'Seoul';
+          // Tìm gợi ý tên đường từ mô tả các căn (VD: Hyoryeong-ro 53-gil / 효령로53길 50)
+          const allDescText = extractedRooms.map((r) => `${r.title}\n${r.description}`).join('\n');
+          const streetHintMatch =
+            allDescText.match(/([가-힣0-9-]+(?:로|길)\s*\d+(?:-\d+)?)/) ||
+            allDescText.match(/(\d+\s+[A-Za-z-]+-(?:ro|gil)(?:\s+\d+-gil)?)/i);
+          const streetHint = streetHintMatch ? streetHintMatch[1] : '';
+          const addrHit = await searchAddressByBuildingName(
+            dominantBuilding,
+            firstDist,
+            firstCity,
+            streetHint,
+          );
           for (const r of extractedRooms) {
             if (!r.buildingName || isBlacklistedBuildingName(r.buildingName)) {
               r.buildingName = dominantBuilding;
             }
             if (addrHit?.address) r.address = addrHit.address;
-            if (addrHit?.district && !r.district) r.district = addrHit.district;
+            if (addrHit?.district) r.district = addrHit.district;
+            else if (baseReverseGeo?.district && !r.district) r.district = baseReverseGeo.district;
             if (addrHit?.city) r.city = addrHit.city;
             if (addrHit?.country) r.country = addrHit.country;
           }
           this.pushLog(
             job,
-            `[Fallback Parser] Chốt tên tòa nhà: "${dominantBuilding}"${addrHit?.address ? ` | Địa chỉ: ${addrHit.address}` : ''}`,
+            `[Forward Geocode] Chốt tòa nhà: "${dominantBuilding}" | Quận: ${addrHit?.district || firstDist || 'N/A'} | Địa chỉ: ${addrHit?.address || `${firstDist} ${firstCity}`}`,
             'step',
           );
         } else {
           for (const r of extractedRooms) {
-            if (!r.address || r.address === r.city || !r.district || !r.buildingName) {
-              const rev = await reverseGeocodeCoords(r.lat, r.lng);
-              if (rev?.buildingName && !r.buildingName) r.buildingName = rev.buildingName;
-              if (rev?.address && (!r.address || r.address === r.city)) r.address = rev.address;
+            if (!r.district || !r.city) {
+              const rev = (await reverseGeocodeCoords(r.lat, r.lng)) || baseReverseGeo;
               if (rev?.district && !r.district) r.district = rev.district;
+              if (rev?.city) r.city = rev.city;
+              if (rev?.country) r.country = rev.country;
             }
           }
         }
@@ -1444,6 +1563,7 @@ export class DeepLinkExtractorService {
       aiCopyPrompt,
     };
 
+    job.extractedRooms = extractedRooms;
     job.result = result;
     job.preview = bundle.preview;
     job.status = job.isStopRequested ? 'stopped' : 'completed';
@@ -1452,5 +1572,99 @@ export class DeepLinkExtractorService {
       status: job.status,
       result,
     });
+  }
+
+  /**
+   * 1-Click AI Sync: Áp dụng JSON kết quả dán từ ChatGPT/Gemini và xuất lại Excel 7Nights Global mang tên tòa nhà chuẩn.
+   */
+  async applyManualAiJson(jobId: string, aiJsonText: string) {
+    const job = this.jobs.get(jobId);
+    if (!job || !job.extractedRooms || job.extractedRooms.length === 0) {
+      throw new BadRequestException('Không tìm thấy dữ liệu phiên trích xuất để áp dụng JSON.');
+    }
+
+    const cleaned = aiJsonText
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
+    let parsedJson: any;
+    try {
+      parsedJson = JSON.parse(cleaned);
+    } catch {
+      throw new BadRequestException('JSON không hợp lệ. Vui lòng kiểm tra lại đoạn JSON dán từ ChatGPT/Gemini.');
+    }
+
+    const bInfo = parsedJson?.building_infor || parsedJson?.buildingInfor || parsedJson;
+    const roomsArr = Array.isArray(parsedJson?.rooms) ? parsedJson.rooms : [];
+    const roomMap = new Map<string, any>();
+    for (const item of roomsArr) {
+      const id = String(item?.airbnb_room_id || item?.listingId || '').trim();
+      if (id) roomMap.set(id, item);
+    }
+
+    for (const r of job.extractedRooms) {
+      if (bInfo?.building_name && !isBlacklistedBuildingName(String(bInfo.building_name))) {
+        r.buildingName = String(bInfo.building_name).trim();
+      }
+      if (bInfo?.address) r.address = String(bInfo.address).trim();
+      if (bInfo?.district) r.district = String(bInfo.district).trim();
+      if (bInfo?.city) r.city = String(bInfo.city).trim();
+      if (bInfo?.country) r.country = String(bInfo.country).trim();
+      if (bInfo?.swimming_pool) r.amenityFlags.swimmingPool = String(bInfo.swimming_pool).trim();
+      if (bInfo?.gym) r.amenityFlags.gym = String(bInfo.gym).trim();
+      if (bInfo?.gym_fee) r.amenityFlags.gymFee = String(bInfo.gym_fee).trim();
+      if (bInfo?.parking) r.amenityFlags.parking = String(bInfo.parking).trim();
+
+      const aiR = roomMap.get(r.listingId);
+      if (aiR) {
+        if (aiR.supplier_apartment_code !== undefined) {
+          r.supplierApartmentCode = String(aiR.supplier_apartment_code || '').trim();
+        }
+        if (aiR.child_policy) r.childPolicy = String(aiR.child_policy).trim();
+        if (aiR.check_in_time) r.checkInTime = normalizeUnicodeSpaces(String(aiR.check_in_time));
+        if (aiR.check_out_time) r.checkOutTime = normalizeUnicodeSpaces(String(aiR.check_out_time));
+      }
+
+      r.hostAirbnbLink = normalizeHostProfileUrl(r.hostAirbnbLink, 'https://www.airbnb.com', r.hostId);
+      this.db.upsertTab2RoomCache(
+        r.listingId,
+        job.parsedUrl?.platformLocation.placeId || r.city,
+        JSON.stringify(r),
+        true,
+      );
+    }
+
+    const bundle = await exportSevenNightsBundle({
+      outputDir: this.appConfig.outputDir,
+      locationLabel: job.parsedUrl?.platformLocation.cityGuess || 'Seoul',
+      rooms: job.extractedRooms,
+      downloadPhotos: job.input?.downloadPhotos ?? false,
+      onLog: (m, l) => this.pushLog(job, m, l),
+    });
+
+    const newResult: DeepExtractBundleResult = {
+      ...bundle,
+      totalFound: job.result?.totalFound || job.extractedRooms.length,
+      totalExtracted: job.extractedRooms.length,
+      stoppedEarly: job.result?.stoppedEarly,
+      browserKeptOpen: job.result?.browserKeptOpen,
+      aiCopyPrompt: job.result?.aiCopyPrompt,
+    };
+    job.result = newResult;
+    job.preview = bundle.preview;
+    this.broadcast(job, 'preview', bundle.preview);
+    this.pushLog(
+      job,
+      `[1-Click AI Sync] Đã áp dụng JSON & xuất lại ${bundle.sevenNightsExcelFile}!`,
+      'success',
+    );
+
+    return {
+      result: newResult,
+      preview: bundle.preview,
+      message: `Đã áp dụng JSON AI & xuất lại ${bundle.sevenNightsExcelFile}!`,
+    };
   }
 }

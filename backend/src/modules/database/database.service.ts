@@ -230,8 +230,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const row: any = stmt.get(id);
       if (row && row.room_json) {
         try {
+          const parsedRoom = JSON.parse(row.room_json);
+          if (parsedRoom) {
+            const rawLink = String(parsedRoom.hostAirbnbLink || '');
+            const idMatch =
+              rawLink.match(/\/users\/(?:show|profile)\/(\d+)/i)?.[1] ||
+              (typeof parsedRoom.hostId === 'string' && /^\d+$/.test(parsedRoom.hostId.trim())
+                ? parsedRoom.hostId.trim()
+                : '');
+            if (idMatch) {
+              parsedRoom.hostAirbnbLink = `https://www.airbnb.com/users/profile/${idMatch}`;
+            }
+          }
           out.set(String(row.listing_id), {
-            room: JSON.parse(row.room_json),
+            room: parsedRoom,
             isComplete: Number(row.is_complete) === 1,
           });
         } catch {
@@ -240,6 +252,18 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       }
     }
     return out;
+  }
+
+  clearTab2RoomCache(listingIds?: string[]) {
+    this.ensureOpen();
+    if (listingIds && listingIds.length > 0) {
+      const stmt = this.db.prepare(`DELETE FROM tab2_room_cache WHERE listing_id = ?`);
+      for (const id of listingIds) {
+        stmt.run(id);
+      }
+      return;
+    }
+    this.db.exec(`DELETE FROM tab2_room_cache`);
   }
 
   getCompletedRoomIds(): Set<string> {

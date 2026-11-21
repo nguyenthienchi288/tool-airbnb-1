@@ -1,6 +1,6 @@
 export const APP_VERSION =
-  'v4.5.0 - Tab 2 Visible Chrome for Testing, Strict Link Sync & OpenAI GPT-4o Verification';
-export const SHORT_VERSION = 'v4.5.0';
+  'v4.8.0 - Tab 2 Cache Integrity Check, Guaranteed Photo Downloader & Win32 Foreground Window';
+export const SHORT_VERSION = 'v4.8.0';
 
 export const AIRBNB_BASE_URL = 'https://www.airbnb.com.vn';
 export const AIRBNB_API_KEY = 'd306zoyjsyarp7ifhu67rjxn52tv0t20';

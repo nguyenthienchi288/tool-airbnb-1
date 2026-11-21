@@ -207,12 +207,22 @@ export function extractStructuredPdpFromJson(
       }
     }
 
-    // 4. House Rules / Policies
+    // 4. House Rules / Policies (Anh + Hàn + Trung, hỗ trợ cả PoliciesSection & key checkIn/checkOut trực tiếp)
     if (
       idUpper.includes('POLICIES') ||
+      sectionObj.__typename === 'PoliciesSection' ||
       Array.isArray(sectionObj.houseRulesSections) ||
-      Array.isArray(sectionObj.houseRules)
+      Array.isArray(sectionObj.houseRules) ||
+      sectionObj.additionalHouseRules !== undefined ||
+      sectionObj.checkIn !== undefined ||
+      sectionObj.checkOut !== undefined
     ) {
+      if (typeof sectionObj.checkIn === 'string' && !result.checkInTime) {
+        result.checkInTime = normalizeUnicodeSpaces(sectionObj.checkIn);
+      }
+      if (typeof sectionObj.checkOut === 'string' && !result.checkOutTime) {
+        result.checkOutTime = normalizeUnicodeSpaces(sectionObj.checkOut);
+      }
       const ruleGroups: any[] = [];
       if (Array.isArray(sectionObj.houseRulesSections)) {
         ruleGroups.push(...sectionObj.houseRulesSections);
@@ -230,31 +240,42 @@ export function extractStructuredPdpFromJson(
           ruleItems.push(combined);
 
           const hasTimeDigit = /\d/.test(rTitle);
-          if (hasTimeDigit && /check-?in/i.test(rTitle) && /(?:check-?out|checkout|퇴실)/i.test(rTitle)) {
-            const parts = rTitle.split(/(?=check-?out|checkout|퇴실)/i);
+          if (
+            hasTimeDigit &&
+            /(?:check-?in|after|입실|체크인|入住时间)/i.test(rTitle) &&
+            /(?:check-?out|checkout|before|퇴실|체크아웃|退房时间)/i.test(rTitle)
+          ) {
+            const parts = rTitle.split(/(?=check-?out|checkout|퇴실|체크아웃|退房时间)/i);
             const inPart = (parts[0] || '')
-              .replace(/^.*?check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*/i, '')
+              .replace(/^.*?(?:check-?in|입실|체크인|入住时间)(?:\s+after|\s+from|\s+is|\s*:|：)?\s*/i, '')
+              .replace(/^(?:after|from)\s+/i, '')
               .trim();
             const outPart = (parts.slice(1).join(' ') || '')
-              .replace(/^.*?(?:check-?out|checkout|퇴실)(?:\s+before|\s+by|\s+is|\s*:)?\s*/i, '')
+              .replace(/^.*?(?:check-?out|checkout|퇴실|체크아웃|退房时间)(?:\s+before|\s+by|\s+is|\s*:|：)?\s*/i, '')
+              .replace(/^(?:before|by)\s+/i, '')
               .trim();
             if (inPart && !result.checkInTime) result.checkInTime = inPart;
             if (outPart && !result.checkOutTime) result.checkOutTime = outPart;
           } else if (hasTimeDigit) {
-            if (/^check-?in/i.test(rTitle) || /check-?in\s*(?:after|from|is|:)/i.test(rTitle)) {
+            if (
+              /^(?:check-?in|after|입실|체크인|入住时间)/i.test(rTitle) ||
+              /(?:check-?in|입실|체크인|入住时间)\s*(?:after|from|is|:|：)/i.test(rTitle)
+            ) {
               const timeVal = rTitle
-                .replace(/^.*?check-?in(?:\s+after|\s+from|\s+is|\s*:)?\s*/i, '')
+                .replace(/^.*?(?:check-?in|입실|체크인|入住时间)(?:\s+after|\s+from|\s+is|\s*:|：)?\s*/i, '')
+                .replace(/^(?:after|from)\s+/i, '')
                 .trim();
               if (timeVal && !result.checkInTime) result.checkInTime = timeVal;
             }
-            if (/check-?out|checkout|퇴실/i.test(rTitle)) {
+            if (/(?:check-?out|checkout|before|퇴실|체크아웃|退房时间)/i.test(rTitle)) {
               const timeVal = rTitle
-                .replace(/^.*?(?:check-?out|checkout|퇴실)(?:\s+before|\s+by|\s+is|\s*:)?\s*/i, '')
+                .replace(/^.*?(?:check-?out|checkout|퇴실|체크아웃|退房时间)(?:\s+before|\s+by|\s+is|\s*:|：)?\s*/i, '')
+                .replace(/^(?:before|by)\s+/i, '')
                 .trim();
               if (timeVal && !result.checkOutTime) result.checkOutTime = timeVal;
             }
           }
-          if (/(children|infants?|어린이|유아|儿童|婴儿)/i.test(combined)) {
+          if (/(children|infants?|kids|어린이|유아|儿童|婴幼儿)/i.test(combined)) {
             if (!result.childPolicy.includes(combined)) {
               result.childPolicy = result.childPolicy
                 ? `${result.childPolicy}; ${combined}`
@@ -265,7 +286,19 @@ export function extractStructuredPdpFromJson(
       }
       if (sectionObj.additionalHouseRules) {
         const extra = stripHtml(String(sectionObj.additionalHouseRules));
-        if (extra) ruleItems.push(extra);
+        if (extra) {
+          ruleItems.push(extra);
+          for (const line of extra.split(/\r?\n/)) {
+            if (/(children|infants?|kids|어린이|유아|儿童|婴幼儿)/i.test(line)) {
+              const cleanLine = normalizeUnicodeSpaces(line);
+              if (cleanLine && !result.childPolicy.includes(cleanLine)) {
+                result.childPolicy = result.childPolicy
+                  ? `${result.childPolicy}; ${cleanLine}`
+                  : cleanLine;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -357,18 +390,27 @@ export function extractStructuredPdpFromJson(
     if (typeof node.id === 'string' && node.section && typeof node.section === 'object') {
       processSection(node.id, node.section);
     }
+    if (
+      node.__typename === 'PoliciesSection' ||
+      Array.isArray(node.houseRulesSections) ||
+      Array.isArray(node.houseRules)
+    ) {
+      processSection('POLICIES_NODE', node);
+    }
     if (typeof node.title === 'string' && !result.title && node.__typename === 'PdpTitleSection') {
       result.title = normalizeUnicodeSpaces(node.title);
     }
 
-    // Bắt trực tiếp mọi URL ảnh phòng chất lượng cao trong JSON (hosting / miso / prohost)
-    const rawPhotoUrl = node.originalUrl || node.baseUrl || node.pictureUrl;
+    // Bắt trực tiếp mọi URL ảnh phòng chất lượng cao trong JSON
+    const rawPhotoUrl = node.originalUrl || node.baseUrl || node.pictureUrl || node.url;
     if (typeof rawPhotoUrl === 'string') {
       const w = Number(node.width || node.aspectRatioWidth || 0);
       if (
         !(w > 0 && w < 400) &&
-        /muscache\.com\/im\/pictures\/(?:hosting|miso|prohost|lombard)/i.test(rawPhotoUrl) &&
-        !/user|avatar|AirbnbPlatformAssets|search-bar-icons|orthographic-images/i.test(rawPhotoUrl)
+        /muscache\.com\/im\/pictures\//i.test(rawPhotoUrl) &&
+        !/\/users\/|user|avatar|AirbnbPlatformAssets|search-bar-icons|orthographic-images/i.test(
+          rawPhotoUrl,
+        )
       ) {
         photoSet.add(rawPhotoUrl.replace(/im_w=\d+/i, 'im_w=1200'));
       }

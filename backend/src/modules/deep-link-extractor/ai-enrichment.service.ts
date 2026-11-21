@@ -117,10 +117,31 @@ export class AiEnrichmentService {
     }));
 
     return `Hãy đóng vai chuyên viên kiểm định dữ liệu căn hộ dịch vụ Airbnb (chuẩn 7Nights Global).
-Dựa vào tọa độ khung bản đồ (${centerLat}, ${centerLng}), địa chỉ tham khảo (${reverseGeoAddress || 'N/A'}) và dữ liệu thật của ${rooms.length} căn hộ dưới đây:
-1. Xác định chính xác Tên Tòa Nhà (Building Name song ngữ Anh-Hàn nếu có, loại bỏ từ khóa quảng cáo rác như Luxury Residence / Cozy Stay), Địa chỉ đầy đủ, District, City, Country và Google Maps Link.
-2. Kiểm chứng Gym (kèm giờ mở cửa), Gym Fee (chỉ ghi Free hoặc Have to pay nếu có trong mô tả, không bịa), Parking, Swimming Pool.
-3. Kiểm tra từng căn hộ để bổ sung: Mã căn (supplier_apartment_code nếu có), Child policy, giờ Check-in / Check-out chuẩn, và rà soát mâu thuẫn giữa mô tả với thông số phòng.
+Dựa vào tọa độ khung bản đồ (${centerLat}, ${centerLng}), địa chỉ tham khảo từ ArcGIS (${reverseGeoAddress || 'N/A'}) và dữ liệu thật của ${rooms.length} căn hộ dưới đây, hãy trả về DUY NHẤT một khối JSON hợp lệ theo đúng cấu trúc sau (không thêm giải thích ngoài JSON):
+
+{
+  "building_infor": {
+    "building_name": "Tên tòa nhà/Officetel chuẩn song ngữ Anh-Hàn (VD: Zizel Signity (지젤시그니티)). CẤM từ khóa quảng cáo (Luxury Residence) hoặc địa danh du lịch (Gyeongbokgung Palace)",
+    "address": "Địa chỉ đường phố đầy đủ tiếng Anh + tiếng Hàn + mã bưu chính",
+    "district": "Quận/Huyện (VD: Seocho-gu)",
+    "city": "Thành phố (VD: Seoul)",
+    "country": "Quốc gia (VD: South Korea)",
+    "google_link": "https://www.google.com/maps/search/?api=1&query=...",
+    "swimming_pool": "YES hoặc NO",
+    "gym": "YES (kèm giờ mở cửa nếu có) hoặc NO",
+    "gym_fee": "Free hoặc Have to pay (chỉ điền nếu có căn cứ trong mô tả, không có ghi Check with host)",
+    "parking": "yes, free parking hoặc yes, payable parking hoặc NO"
+  },
+  "rooms": [
+    {
+      "airbnb_room_id": "ID phòng",
+      "supplier_apartment_code": "Mã phòng/căn hộ nếu có trong bài, không có để trống",
+      "child_policy": "Chính sách trẻ em/trẻ sơ sinh chuẩn hóa",
+      "check_in_time": "VD: 3:00 PM",
+      "check_out_time": "VD: 11:00 AM"
+    }
+  ]
+}
 
 DỮ LIỆU CÁC CĂN HỘ:
 ${JSON.stringify(summaryRooms, null, 2)}`;

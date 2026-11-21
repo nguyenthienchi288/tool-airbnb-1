@@ -76,7 +76,13 @@ export class ExporterService {
       amenities,
       host_id: String(row.host_id || ''),
       host_name: String(row.host_name || ''),
-      host_url: String(row.host_url || ''),
+      host_url: (() => {
+        const rawUrl = String(row.host_url || '').trim();
+        const hid =
+          rawUrl.match(/\/users\/(?:show|profile)\/(\d+)/i)?.[1] ||
+          (/^\d+$/.test(String(row.host_id || '').trim()) ? String(row.host_id).trim() : '');
+        return hid ? `https://www.airbnb.com/users/profile/${hid}` : rawUrl;
+      })(),
       pdp_scraped: pdpScraped,
     };
   }

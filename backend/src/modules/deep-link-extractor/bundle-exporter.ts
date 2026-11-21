@@ -9,6 +9,7 @@ import {
   SevenNightsPreviewData,
   SevenNightsRoomRow,
 } from './types';
+import { normalizeHostProfileUrl } from './url-parser';
 import { createZipFromDirectory } from './zip-utils';
 
 const HANGUL_INITIALS = [
@@ -156,9 +157,7 @@ export function buildSevenNightsPreview(
         code: hCode,
         name: room.hostName || 'Unknown Host',
         country,
-        link:
-          room.hostAirbnbLink ||
-          (room.hostId ? `https://www.airbnb.com/users/profile/${room.hostId}` : ''),
+        link: normalizeHostProfileUrl(room.hostAirbnbLink, 'https://www.airbnb.com', room.hostId),
         rooms: [],
         roomCodes: [],
         supplierCodes: [],
@@ -223,12 +222,16 @@ export function buildSevenNightsPreview(
       g.rooms.map((r) => r.address).find((a) => a && a.length > 5) ||
       `${first?.district || ''} ${first?.city || defaultCity}`.trim();
 
-    const googleLink =
-      g.name && !g.name.endsWith('Residence')
-        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${g.name.replace(/\([^)]*\)/g, '').trim()} ${first?.district || ''} ${first?.city || defaultCity}`.trim())}`
-        : lat !== null && lng !== null && lat !== undefined && lng !== undefined
-          ? `https://www.google.com/maps?q=${lat},${lng}`
-          : '';
+    const cleanBNameForLink = g.name.replace(/\([^)]*\)/g, '').trim();
+    const searchQuery = [cleanBNameForLink, address, first?.district, first?.city || defaultCity]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const googleLink = searchQuery
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(searchQuery)}`
+      : lat !== null && lng !== null && lat !== undefined && lng !== undefined
+        ? `https://www.google.com/maps?q=${lat},${lng}`
+        : '';
 
     return {
       'Building Code': g.code,
@@ -254,7 +257,7 @@ export function buildSevenNightsPreview(
     'bank name': '',
     'account number': '',
     'account name': '',
-    'host airbnb link': h.link,
+    'host airbnb link': normalizeHostProfileUrl(h.link, 'https://www.airbnb.com', h.rooms[0]?.hostId),
     'supplier apartment code': Array.from(new Set(h.supplierCodes)).join(', '),
     'ROOM INFOR': h.roomCodes.join(', '),
   }));
@@ -276,6 +279,8 @@ async function downloadSinglePhoto(
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          Referer: 'https://www.airbnb.com/',
+          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
         },
       });
       clearTimeout(timer);
@@ -382,6 +387,10 @@ export async function exportSevenNightsBundle(params: {
       if (preview.rooms[i]) {
         preview.rooms[i].Photo = room.localPhotoDir;
       }
+      onLog?.(
+        `[Photos] ${roomCode} (#${room.listingId}): Đã tải ${roomPhotoCount}/${urls.length} ảnh vào Photos/${roomCode}/.`,
+        roomPhotoCount > 0 ? 'success' : 'warn',
+      );
     }
     onLog?.(`[Photos] Đã tải xong ${totalPhotosDownloaded} ảnh vào thư mục Photos/.`, 'success');
   }

@@ -182,6 +182,7 @@ export interface DeepExtractJobInput {
   aiApiKey?: string;
   enableAiEnrichment?: boolean;
   keepBrowserOpen?: boolean;
+  ignoreCache?: boolean;
 }
 
 export interface DeepExtractBundleResult {

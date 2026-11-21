@@ -51,6 +51,9 @@ export declare class DeepLinkExtractorController {
         jobId: string;
         ok: boolean;
     }>;
+    clearCache(): {
+        ok: boolean;
+    };
     updateProxy(body?: {
         proxyUrl?: string;
         jobId?: string;
@@ -64,6 +67,14 @@ export declare class DeepLinkExtractorController {
     }>;
     closeKeptBrowser(): Promise<{
         ok: boolean;
+    }>;
+    applyAiJson(body: {
+        jobId?: string;
+        aiJsonText?: string;
+    }): Promise<{
+        result: import("./types").DeepExtractBundleResult;
+        preview: import("./types").SevenNightsPreviewData;
+        message: string;
     }>;
     downloadBundleFile(bundleName: string, fileName: string, res: Response): void;
     downloadBundleZip(zipFileName: string, res: Response): void;

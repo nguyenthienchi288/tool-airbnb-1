@@ -157,3 +157,50 @@ export function checkBoundingBox(
 
   return { status: 'outside', label: 'Ngoài khung bản đồ' };
 }
+
+const TRACKING_QUERY_PARAMS = [
+  'previous_page_name',
+  'source_impression_id',
+  'federated_search_id',
+  'search_id',
+  'search_mode',
+  'check_in',
+  'check_out',
+  'adults',
+  'guests',
+  'children',
+  'infants',
+  'pets',
+  'c',
+  'af',
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+  'utm_term',
+  'locale',
+];
+
+/**
+ * Chuẩn hóa toàn bộ link hồ sơ chủ nhà sang định dạng quốc tế duy nhất:
+ * https://www.airbnb.com/users/profile/{hostId}
+ */
+export function normalizeHostProfileUrl(
+  rawUrlOrId?: string | null,
+  _sourceOrigin?: string,
+  fallbackHostId?: string | null,
+): string {
+  const candidates = [rawUrlOrId, fallbackHostId];
+  for (const cand of candidates) {
+    const str = String(cand || '').trim();
+    if (!str) continue;
+    const urlMatch = str.match(/\/users\/(?:show|profile)\/(\d+)/i);
+    if (urlMatch && urlMatch[1]) {
+      return `https://www.airbnb.com/users/profile/${urlMatch[1]}`;
+    }
+    if (/^\d+$/.test(str)) {
+      return `https://www.airbnb.com/users/profile/${str}`;
+    }
+  }
+  return '';
+}

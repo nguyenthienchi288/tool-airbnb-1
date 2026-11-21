@@ -54,6 +54,7 @@ export class DeepLinkExtractorController {
       aiApiKey: body?.aiApiKey ? String(body.aiApiKey).trim() : undefined,
       enableAiEnrichment: body?.enableAiEnrichment !== false,
       keepBrowserOpen: Boolean(body?.keepBrowserOpen),
+      ignoreCache: Boolean(body?.ignoreCache),
     });
 
     return { jobId: job.jobId, status: job.status };
@@ -124,8 +125,13 @@ export class DeepLinkExtractorController {
   @Post('reset-session')
   async resetSession(@Body() body?: { jobId?: string }) {
     const job = await this.extractor.resetSession(body?.jobId);
-    if (!job) throw new NotFoundException('Không có tiến trình nào đang chạy.');
-    return { jobId: job.jobId, ok: true };
+    return { jobId: job?.jobId || null, ok: true };
+  }
+
+  @Post('clear-cache')
+  clearCache() {
+    this.extractor.clearCache();
+    return { ok: true };
   }
 
   @Post('update-proxy')
@@ -139,6 +145,14 @@ export class DeepLinkExtractorController {
   async closeKeptBrowser() {
     await this.extractor.closeKeptBrowser();
     return { ok: true };
+  }
+
+  @Post('apply-ai-json')
+  async applyAiJson(@Body() body: { jobId?: string; aiJsonText?: string }) {
+    if (!body?.jobId || !body?.aiJsonText) {
+      throw new BadRequestException('Vui lòng cung cấp jobId và nội dung JSON kết quả từ AI.');
+    }
+    return this.extractor.applyManualAiJson(body.jobId, body.aiJsonText);
   }
 
   @Get('download-file/:bundleName/:fileName')
