@@ -237,9 +237,8 @@ export class BrowserService {
       headless: false,
       slowMo: 35,
       args: [
-        '--start-maximized',
-        '--window-position=50,40',
-        '--window-size=1366,820',
+        '--window-position=80,60',
+        '--window-size=1280,780',
         '--disable-blink-features=AutomationControlled',
         '--no-sandbox',
       ],
@@ -255,7 +254,7 @@ export class BrowserService {
     });
 
     const context = await browser.newContext({
-      viewport: { width: 1366, height: 820 },
+      viewport: { width: 1280, height: 780 },
       locale: 'en-US',
       timezoneId: 'Asia/Seoul',
       userAgent: DEFAULT_USER_AGENT,
