@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   NotFoundException,
   Param,
   Post,
+  Query,
   Req,
   Res,
   UploadedFile,
@@ -28,6 +30,22 @@ export class SevenNightsController {
     res.type('html').send(this.syncService.getUiHtml());
   }
 
+  @Get('output-files')
+  listOutputFiles() {
+    return { files: this.syncService.listOutputExcelFiles() };
+  }
+
+  @Get('output-file')
+  downloadOutputFile(@Query('path') relPath: string, @Res() res: Response) {
+    const { fileName, buffer } = this.syncService.readOutputExcelFile(relPath);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+    res.send(buffer);
+  }
+
   @Get('download-template')
   async downloadTemplate(@Res() res: Response) {
     const workbook = await this.syncService.createTemplate();
@@ -45,9 +63,16 @@ export class SevenNightsController {
       limits: { fileSize: 20 * 1024 * 1024 },
     }),
   )
-  async preview(@UploadedFile() file?: UploadedWorkbook) {
+  async preview(
+    @UploadedFile() file?: UploadedWorkbook,
+    @Body('bundleRelativePath') bundleRelativePath?: string,
+  ) {
     this.assertWorkbook(file);
-    return this.syncService.previewWorkbook(file.buffer, file.originalname);
+    return this.syncService.previewWorkbook(
+      file.buffer,
+      file.originalname,
+      bundleRelativePath,
+    );
   }
 
   @Post('sync')
@@ -56,9 +81,19 @@ export class SevenNightsController {
       limits: { fileSize: 20 * 1024 * 1024 },
     }),
   )
-  startSync(@UploadedFile() file?: UploadedWorkbook) {
+  startSync(
+    @UploadedFile() file?: UploadedWorkbook,
+    @Body('uploadPhotos') uploadPhotosRaw?: string,
+    @Body('bundleRelativePath') bundleRelativePath?: string,
+  ) {
     this.assertWorkbook(file);
-    return this.syncService.startSync(file.buffer, file.originalname);
+    const uploadPhotos = uploadPhotosRaw !== 'false' && uploadPhotosRaw !== '0';
+    return this.syncService.startSync(
+      file.buffer,
+      file.originalname,
+      uploadPhotos,
+      bundleRelativePath,
+    );
   }
 
   @Get(':jobId/stream')

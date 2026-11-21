@@ -8,7 +8,15 @@ import {
   Upload,
 } from 'lucide-react';
 import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
-import { ReportFile } from '../types/api';
+
+interface OutputExcelItem {
+  relativePath: string;
+  fileName: string;
+  bundleFolder: string;
+  size: number;
+  mtimeMs: number;
+  updatedAt: string;
+}
 
 type SheetName = 'Building Infor' | 'Host Infor' | 'ROOM INFOR';
 
@@ -17,6 +25,9 @@ interface PreviewRow {
   values: Record<string, unknown>;
   errors: string[];
   systemActions: string[];
+  photoCount?: number;
+  photoFound?: boolean;
+  syncAction?: 'create' | 'update';
 }
 
 interface PreviewSheet {
@@ -55,7 +66,8 @@ function displayValue(value: unknown): string {
 
 export function LarkSevenNightsTab() {
   const [file, setFile] = useState<File | null>(null);
-  const [reports, setReports] = useState<ReportFile[]>([]);
+  const [selectedBundlePath, setSelectedBundlePath] = useState<string>('');
+  const [reports, setReports] = useState<OutputExcelItem[]>([]);
   const [selectedReport, setSelectedReport] = useState('');
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
   const [activeSheet, setActiveSheet] = useState<SheetName>('ROOM INFOR');
@@ -66,22 +78,26 @@ export function LarkSevenNightsTab() {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isLoadingOutput, setIsLoadingOutput] = useState(false);
   const [isStartingSync, setIsStartingSync] = useState(false);
+  const [includePhotos, setIncludePhotos] = useState(true);
   const [result, setResult] = useState<SyncResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  useEffect(() => {
+  const fetchOutputFiles = () => {
     setIsLoadingReports(true);
-    fetch('/api/reports')
+    fetch('/lark-7nights/output-files')
       .then(async (response) => {
         if (!response.ok) return;
-        const data = (await response.json()) as { files?: ReportFile[] };
-        setReports((data.files || []).filter((report) => /\.(xlsx|xls)$/i.test(report.name)));
+        const data = (await response.json()) as { files?: OutputExcelItem[] };
+        setReports(data.files || []);
       })
       .catch(() => undefined)
       .finally(() => setIsLoadingReports(false));
+  };
 
+  useEffect(() => {
+    fetchOutputFiles();
     return () => eventSourceRef.current?.close();
   }, []);
 
@@ -91,7 +107,7 @@ export function LarkSevenNightsTab() {
     }
   }, [logs]);
 
-  const chooseFile = (nextFile: File | null) => {
+  const chooseFile = (nextFile: File | null, bundlePath = '') => {
     if (!nextFile) return;
     if (!/\.(xlsx|xls)$/i.test(nextFile.name)) {
       setErrorMessage('Chỉ hỗ trợ file Excel .xlsx hoặc .xls.');
@@ -102,6 +118,7 @@ export function LarkSevenNightsTab() {
       return;
     }
     setFile(nextFile);
+    setSelectedBundlePath(bundlePath);
     setPreview(null);
     setResult(null);
     setStatus('idle');
@@ -124,14 +141,15 @@ export function LarkSevenNightsTab() {
     setErrorMessage(null);
     try {
       const response = await fetch(
-        `/api/reports/download/${encodeURIComponent(selectedReport)}`,
+        `/lark-7nights/output-file?path=${encodeURIComponent(selectedReport)}`,
       );
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(getErrorMessage(body, 'Không thể tải file trong output/.'));
       }
       const blob = await response.blob();
-      chooseFile(new File([blob], selectedReport, { type: blob.type }));
+      const fileName = selectedReport.split('/').pop() || selectedReport;
+      chooseFile(new File([blob], fileName, { type: blob.type }), selectedReport);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Lỗi tải file output/.');
     } finally {
@@ -143,6 +161,12 @@ export function LarkSevenNightsTab() {
     if (!file) throw new Error('Vui lòng chọn file Excel trước.');
     const body = new FormData();
     body.append('file', file);
+    if (selectedBundlePath) {
+      body.append('bundleRelativePath', selectedBundlePath);
+    }
+    if (endpoint === 'sync') {
+      body.append('uploadPhotos', String(includePhotos));
+    }
     const response = await fetch(`/lark-7nights/${endpoint}`, {
       method: 'POST',
       body,
@@ -238,6 +262,9 @@ export function LarkSevenNightsTab() {
   };
 
   const activePreview = preview?.sheets.find((sheet) => sheet.name === activeSheet);
+  const roomPreviewRows = preview?.sheets.find((sheet) => sheet.name === 'ROOM INFOR')?.rows || [];
+  const roomCreateCount = roomPreviewRows.filter((row) => row.syncAction === 'create').length;
+  const roomUpdateCount = roomPreviewRows.filter((row) => row.syncAction === 'update').length;
   const isRunning = status === 'running';
   const hasPreviewErrors = Boolean(preview && preview.errorCount > 0);
 
@@ -305,18 +332,18 @@ export function LarkSevenNightsTab() {
             <select
               value={selectedReport}
               onChange={(event) => setSelectedReport(event.target.value)}
-              className="max-w-[280px] rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 focus:border-sky-500 focus:outline-none"
+              className="max-w-[340px] rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 focus:border-sky-500 focus:outline-none"
             >
               <option value="">
                 {isLoadingReports
-                  ? 'Đang tải danh sách output/...'
+                  ? 'Đang quét thư mục output/...'
                   : reports.length
-                    ? 'Chọn file Excel trong output/'
+                    ? 'Hoặc chọn nhanh file vừa cào từ thư mục output/'
                     : 'Không có file Excel trong output/'}
               </option>
               {reports.map((report) => (
-                <option key={report.name} value={report.name}>
-                  {report.name}
+                <option key={report.relativePath} value={report.relativePath}>
+                  {report.bundleFolder} / {report.fileName}
                 </option>
               ))}
             </select>
@@ -330,16 +357,7 @@ export function LarkSevenNightsTab() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setIsLoadingReports(true);
-                fetch('/api/reports')
-                  .then((response) => (response.ok ? response.json() : { files: [] }))
-                  .then((data: { files?: ReportFile[] }) =>
-                    setReports((data.files || []).filter((report) => /\.(xlsx|xls)$/i.test(report.name))),
-                  )
-                  .catch(() => setErrorMessage('Không thể làm mới danh sách output/.'))
-                  .finally(() => setIsLoadingReports(false));
-              }}
+              onClick={fetchOutputFiles}
               title="Làm mới danh sách output/"
               className="rounded-xl border border-slate-700 bg-slate-900 p-2 text-slate-400 hover:text-white"
             >
@@ -377,22 +395,34 @@ export function LarkSevenNightsTab() {
             Xem trước dữ liệu
           </div>
           {preview && (
-            <span
-              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] ${
-                preview.errorCount
-                  ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
-                  : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-              }`}
-            >
-              {preview.errorCount ? (
-                <AlertTriangle className="h-3.5 w-3.5" />
-              ) : (
-                <CheckCircle2 className="h-3.5 w-3.5" />
+            <div className="flex flex-wrap items-center gap-2">
+              {roomPreviewRows.length > 0 && (
+                <>
+                  <span className="inline-flex items-center rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300">
+                    ROOM INFOR tạo mới: {roomCreateCount}
+                  </span>
+                  <span className="inline-flex items-center rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-300">
+                    ROOM INFOR cập nhật: {roomUpdateCount}
+                  </span>
+                </>
               )}
-              {preview.errorCount
-                ? `${preview.errorCount} lỗi dữ liệu gốc`
-                : 'Dữ liệu gốc hợp lệ'}
-            </span>
+              <span
+                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] ${
+                  preview.errorCount
+                    ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
+                    : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                }`}
+              >
+                {preview.errorCount ? (
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                ) : (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                )}
+                {preview.errorCount
+                  ? `${preview.errorCount} lỗi dữ liệu gốc`
+                  : 'Dữ liệu gốc hợp lệ'}
+              </span>
+            </div>
           )}
         </div>
 
@@ -470,15 +500,37 @@ export function LarkSevenNightsTab() {
                     <td className="whitespace-nowrap border-b border-slate-800/80 px-3 py-2 font-mono text-slate-500">
                       {row.excelRow}
                     </td>
-                    {activePreview.headers.map((header) => (
-                      <td
-                        key={header}
-                        title={displayValue(row.values[header])}
-                        className="max-w-[280px] truncate border-b border-slate-800/80 px-3 py-2"
-                      >
-                        {displayValue(row.values[header])}
-                      </td>
-                    ))}
+                    {activePreview.headers.map((header) => {
+                      const isRoomPhotoCol =
+                        activeSheet === 'ROOM INFOR' &&
+                        header.trim().toLowerCase() === 'photo';
+                      return (
+                        <td
+                          key={header}
+                          title={displayValue(row.values[header])}
+                          className="max-w-[280px] truncate border-b border-slate-800/80 px-3 py-2"
+                        >
+                          {isRoomPhotoCol ? (
+                            <div className="flex items-center gap-2">
+                              {row.photoFound && (row.photoCount ?? 0) > 0 ? (
+                                <span className="inline-flex shrink-0 items-center rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                                  📸 Tìm thấy {row.photoCount} ảnh
+                                </span>
+                              ) : (
+                                <span className="inline-flex shrink-0 items-center rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+                                  ⚠️ Không thấy thư mục ảnh
+                                </span>
+                              )}
+                              <span className="truncate text-[11px] text-slate-400">
+                                {displayValue(row.values[header])}
+                              </span>
+                            </div>
+                          ) : (
+                            displayValue(row.values[header])
+                          )}
+                        </td>
+                      );
+                    })}
                     <td className="border-b border-slate-800/80 px-3 py-2">
                       {row.errors.length ? (
                         <span className="text-rose-300">{row.errors.join(' · ')}</span>
@@ -515,15 +567,27 @@ export function LarkSevenNightsTab() {
             Đỏ = thiếu/sai dữ liệu gốc; xanh = option, upsert danh mục hoặc attachment do hệ thống xử lý.
             Phòng chỉ được đẩy khi toàn bộ khóa liên kết hợp lệ.
           </p>
-          <button
-            type="button"
-            disabled={!preview || hasPreviewErrors || isRunning || isStartingSync}
-            onClick={() => void startSync()}
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-sky-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-sky-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Play className="h-3.5 w-3.5 fill-current" />
-            {isRunning || isStartingSync ? 'Đang đồng bộ...' : 'Đồng bộ lên Lark Base'}
-          </button>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-200 select-none">
+              <input
+                type="checkbox"
+                checked={includePhotos}
+                onChange={(event) => setIncludePhotos(event.target.checked)}
+                disabled={isRunning || isStartingSync}
+                className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500"
+              />
+              <span>Kèm upload ảnh phòng (Photos/)</span>
+            </label>
+            <button
+              type="button"
+              disabled={!preview || hasPreviewErrors || isRunning || isStartingSync}
+              onClick={() => void startSync()}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-sky-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-sky-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Play className="h-3.5 w-3.5 fill-current" />
+              {isRunning || isStartingSync ? 'Đang đồng bộ...' : 'Đồng bộ lên Lark Base'}
+            </button>
+          </div>
         </div>
       </section>
 

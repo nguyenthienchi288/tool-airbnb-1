@@ -5,6 +5,9 @@ export interface SevenNightsPreviewRow {
   values: Record<string, unknown>;
   errors: string[];
   systemActions: string[];
+  photoCount?: number;
+  photoFound?: boolean;
+  syncAction?: 'create' | 'update';
 }
 
 export interface SevenNightsPreviewSheet {
