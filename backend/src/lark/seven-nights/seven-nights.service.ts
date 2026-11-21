@@ -650,10 +650,29 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
     }
   }
 
-  private normalizeUrlNoQuery(raw: unknown): string {
+  private normalizeExactText(raw: unknown): string {
+    return this.extractLarkCellText(raw)
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  private normalizeGoogleMapsLink(raw: unknown): string {
     const str = this.extractLarkCellText(raw).trim();
     if (!str) return '';
+    // Giữ nguyên toàn bộ query (?api=1&query=...) để phân biệt chính xác từng tòa nhà
+    return str.replace(/\/+$/, '').toLowerCase();
+  }
+
+  private normalizeHostAirbnbLink(raw: unknown): string {
+    const str = this.extractLarkCellText(raw).trim();
+    if (!str) return '';
+    // Giữ nguyên toàn bộ path /users/profile/<user_id>, chỉ bỏ query tracking (?source=..., ?locale=...)
     return str.split('?')[0].replace(/\/+$/, '').toLowerCase();
+  }
+
+  private isValidLookupKey(key: string): boolean {
+    return Boolean(key && key.length >= 2);
   }
 
   private extractAirbnbRoomIdFromUrl(raw: unknown): string {
@@ -749,18 +768,18 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
 
     for (const rec of buildingRecords) {
       const f = rec.fields || {};
-      const codeKey = this.extractLarkCellText(f[buildingPrimary.field_name]);
-      if (codeKey) building.set(this.normalizeKey(codeKey), rec.record_id);
+      const codeKey = this.normalizeKey(this.extractLarkCellText(f[buildingPrimary.field_name]));
+      if (this.isValidLookupKey(codeKey)) building.set(codeKey, rec.record_id);
 
-      const bName = this.extractLarkCellText(
+      const bName = this.normalizeExactText(
         this.fieldValueByNames(f, ['buildingname']),
       );
-      if (bName) buildingByName.set(bName.toLowerCase().trim(), rec.record_id);
+      if (this.isValidLookupKey(bName)) buildingByName.set(bName, rec.record_id);
 
-      const gLink = this.normalizeUrlNoQuery(
+      const gLink = this.normalizeGoogleMapsLink(
         this.fieldValueByNames(f, ['googlelink']),
       );
-      if (gLink) buildingByGoogleLink.set(gLink, rec.record_id);
+      if (this.isValidLookupKey(gLink)) buildingByGoogleLink.set(gLink, rec.record_id);
     }
 
     const host = new Map<string, string>();
@@ -769,18 +788,18 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
 
     for (const rec of hostRecords) {
       const f = rec.fields || {};
-      const codeKey = this.extractLarkCellText(f[hostPrimary.field_name]);
-      if (codeKey) host.set(this.normalizeKey(codeKey), rec.record_id);
+      const codeKey = this.normalizeKey(this.extractLarkCellText(f[hostPrimary.field_name]));
+      if (this.isValidLookupKey(codeKey)) host.set(codeKey, rec.record_id);
 
-      const hLink = this.normalizeUrlNoQuery(
+      const hLink = this.normalizeHostAirbnbLink(
         this.fieldValueByNames(f, ['hostairbnblink']),
       );
-      if (hLink) hostByAirbnbLink.set(hLink, rec.record_id);
+      if (this.isValidLookupKey(hLink)) hostByAirbnbLink.set(hLink, rec.record_id);
 
-      const hName = this.extractLarkCellText(
+      const hName = this.normalizeExactText(
         this.fieldValueByNames(f, ['hostname']),
       );
-      if (hName) hostByName.set(hName.toLowerCase().trim(), rec.record_id);
+      if (this.isValidLookupKey(hName)) hostByName.set(hName, rec.record_id);
     }
 
     const roomByAirbnbId = new Map<string, string>();
@@ -796,12 +815,12 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
       const airbnbId = this.extractCleanRoomId(
         this.fieldValueByNames(f, ['airbnbroomid']),
       );
-      if (airbnbId) roomByAirbnbId.set(airbnbId, rec.record_id);
+      if (this.isValidLookupKey(airbnbId)) roomByAirbnbId.set(airbnbId, rec.record_id);
 
       const urlId = this.extractAirbnbRoomIdFromUrl(
         this.fieldValueByNames(f, ['roomurl']),
       );
-      if (urlId) roomByUrlId.set(urlId, rec.record_id);
+      if (this.isValidLookupKey(urlId)) roomByUrlId.set(urlId, rec.record_id);
 
       const bRecId = buildingRelField
         ? this.extractLarkRelationRecordId(f[buildingRelField.field_name])
@@ -810,7 +829,7 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
         ? this.extractLarkRelationRecordId(f[hostRelField.field_name])
         : '';
       const comp = this.buildRoomCompositeKeyFromValues(bRecId, hRecId, f);
-      if (comp) roomByComposite.set(comp, rec.record_id);
+      if (this.isValidLookupKey(comp)) roomByComposite.set(comp, rec.record_id);
     }
 
     return {
@@ -902,70 +921,88 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
     );
   }
 
-  private findParentExistingRecordId(
+  private findParentExistingMatch(
     name: 'Building Infor' | 'Host Infor',
     values: Record<string, unknown>,
     primary: LarkField,
     references: ReferenceMaps,
-  ): string | undefined {
-    const primaryCode = this.extractLarkCellText(this.valueForField(values, primary));
+  ): { recordId: string; reason: string } | undefined {
+    const rawPrimaryCode = this.extractLarkCellText(this.valueForField(values, primary));
+    const primaryCode = this.normalizeKey(rawPrimaryCode);
     if (name === 'Building Infor') {
-      const bName = this.extractLarkCellText(
+      const rawBName = this.extractLarkCellText(
         this.fieldValueByNames(values, ['buildingname']),
-      )
-        .toLowerCase()
-        .trim();
-      if (bName && references.buildingByName.has(bName)) {
-        return references.buildingByName.get(bName);
+      );
+      const bName = this.normalizeExactText(rawBName);
+      if (this.isValidLookupKey(bName) && references.buildingByName.has(bName)) {
+        const recordId = references.buildingByName.get(bName)!;
+        return { recordId, reason: `Khớp theo Building Name = "${rawBName}" (${recordId})` };
       }
-      const gLink = this.normalizeUrlNoQuery(
+      const gLink = this.normalizeGoogleMapsLink(
         this.fieldValueByNames(values, ['googlelink']),
       );
-      if (gLink && references.buildingByGoogleLink.has(gLink)) {
-        return references.buildingByGoogleLink.get(gLink);
+      if (this.isValidLookupKey(gLink) && references.buildingByGoogleLink.has(gLink)) {
+        const recordId = references.buildingByGoogleLink.get(gLink)!;
+        return { recordId, reason: `Khớp theo google link (${recordId})` };
       }
-      return primaryCode ? references.building.get(this.normalizeKey(primaryCode)) : undefined;
+      if (this.isValidLookupKey(primaryCode) && references.building.has(primaryCode)) {
+        const recordId = references.building.get(primaryCode)!;
+        return { recordId, reason: `Khớp theo ${primary.field_name} = "${rawPrimaryCode}" (${recordId})` };
+      }
+      return undefined;
     }
 
-    const hLink = this.normalizeUrlNoQuery(
+    const hLink = this.normalizeHostAirbnbLink(
       this.fieldValueByNames(values, ['hostairbnblink']),
     );
-    if (hLink && references.hostByAirbnbLink.has(hLink)) {
-      return references.hostByAirbnbLink.get(hLink);
+    if (this.isValidLookupKey(hLink) && references.hostByAirbnbLink.has(hLink)) {
+      const recordId = references.hostByAirbnbLink.get(hLink)!;
+      return { recordId, reason: `Khớp theo host airbnb link = "${hLink}" (${recordId})` };
     }
-    const hName = this.extractLarkCellText(
+    const rawHName = this.extractLarkCellText(
       this.fieldValueByNames(values, ['hostname']),
-    )
-      .toLowerCase()
-      .trim();
-    if (hName && references.hostByName.has(hName)) {
-      return references.hostByName.get(hName);
+    );
+    const hName = this.normalizeExactText(rawHName);
+    if (this.isValidLookupKey(hName) && references.hostByName.has(hName)) {
+      const recordId = references.hostByName.get(hName)!;
+      return { recordId, reason: `Khớp theo host name = "${rawHName}" (${recordId})` };
     }
-    return primaryCode ? references.host.get(this.normalizeKey(primaryCode)) : undefined;
+    if (this.isValidLookupKey(primaryCode) && references.host.has(primaryCode)) {
+      const recordId = references.host.get(primaryCode)!;
+      return { recordId, reason: `Khớp theo ${primary.field_name} = "${rawPrimaryCode}" (${recordId})` };
+    }
+    return undefined;
   }
 
-  private findRoomExistingRecordId(
+  private findRoomExistingMatch(
     values: Record<string, unknown>,
     fields: LarkField[],
     references: ReferenceMaps,
-  ): string | undefined {
+  ): { recordId: string; reason: string } | undefined {
     // Ưu tiên 1: Airbnb Room ID
     const airbnbId = this.extractCleanRoomId(
       this.fieldValueByNames(values, ['airbnbroomid']),
     );
-    if (airbnbId && references.roomByAirbnbId.has(airbnbId)) {
-      return references.roomByAirbnbId.get(airbnbId);
+    if (this.isValidLookupKey(airbnbId) && references.roomByAirbnbId.has(airbnbId)) {
+      const recordId = references.roomByAirbnbId.get(airbnbId)!;
+      return { recordId, reason: `Khớp theo Airbnb Room ID = "${airbnbId}" (${recordId})` };
     }
 
     // Ưu tiên 2: Room URL (/rooms/<id>)
     const urlId = this.extractAirbnbRoomIdFromUrl(
       this.fieldValueByNames(values, ['roomurl']),
     );
-    if (urlId && references.roomByUrlId.has(urlId)) {
-      return references.roomByUrlId.get(urlId);
+    if (this.isValidLookupKey(urlId) && references.roomByUrlId.has(urlId)) {
+      const recordId = references.roomByUrlId.get(urlId)!;
+      return { recordId, reason: `Khớp theo Room URL (/rooms/${urlId}) (${recordId})` };
     }
 
-    // Ưu tiên 3: Tổ hợp buildingRecordId + hostRecordId + Room type + HOW MANY BED + max people + check in time
+    // Nếu đã có Airbnb Room ID hoặc Room URL mà không khớp -> chắc chắn là phòng MỚI (không fallback tổ hợp)
+    if (this.isValidLookupKey(airbnbId) || this.isValidLookupKey(urlId)) {
+      return undefined;
+    }
+
+    // Ưu tiên 3 (chỉ cho file Excel cũ thiếu cả Airbnb Room ID & Room URL): Tổ hợp thuộc tính
     const relations = this.roomRelations(fields);
     const buildingRel = relations.find((r) => this.roomRelationKind(r) === 'building');
     const hostRel = relations.find((r) => this.roomRelationKind(r) === 'host');
@@ -975,15 +1012,18 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
     const hostCode = hostRel
       ? String(this.valueForField(values, hostRel) ?? '').trim()
       : '';
-    const bRecId = buildingCode
-      ? references.building.get(this.normalizeKey(buildingCode)) || ''
-      : '';
-    const hRecId = hostCode
-      ? references.host.get(this.normalizeKey(hostCode)) || ''
-      : '';
+    const bRecId =
+      this.isValidLookupKey(this.normalizeKey(buildingCode))
+        ? references.building.get(this.normalizeKey(buildingCode)) || ''
+        : '';
+    const hRecId =
+      this.isValidLookupKey(this.normalizeKey(hostCode))
+        ? references.host.get(this.normalizeKey(hostCode)) || ''
+        : '';
     const comp = this.buildRoomCompositeKeyFromValues(bRecId, hRecId, values);
-    if (comp && references.roomByComposite.has(comp)) {
-      return references.roomByComposite.get(comp);
+    if (this.isValidLookupKey(comp) && references.roomByComposite.has(comp)) {
+      const recordId = references.roomByComposite.get(comp)!;
+      return { recordId, reason: `Khớp theo tổ hợp dự phòng (${recordId})` };
     }
 
     return undefined;
@@ -1009,9 +1049,13 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
     }> = [];
     for (const row of rows) {
       const recordFields = this.fieldsFromRow(row.values, sheet, fields, references);
-      const recordId = this.findParentExistingRecordId(name, row.values, primary, references);
-      if (recordId) updates.push({ row, recordId, fields: recordFields });
-      else creates.push({ row, fields: recordFields });
+      const match = this.findParentExistingMatch(name, row.values, primary, references);
+      if (match) {
+        this.addLog(job, `🔄 ${name} dòng ${row.excelRow}: Cập nhật — ${match.reason}`);
+        updates.push({ row, recordId: match.recordId, fields: recordFields });
+      } else {
+        creates.push({ row, fields: recordFields });
+      }
     }
 
     this.addLog(job, `📤 ${name}: chuẩn bị ${creates.length} mới, ${updates.length} cập nhật.`);
@@ -1141,9 +1185,17 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
         );
       }
 
-      const existingRecordId = this.findRoomExistingRecordId(row.values, fields, references);
-      if (existingRecordId) {
-        updates.push({ row, recordId: existingRecordId, fields: recordFields });
+      const existingRoomMatch = this.findRoomExistingMatch(row.values, fields, references);
+      if (existingRoomMatch) {
+        this.addLog(
+          job,
+          `🔄 ROOM INFOR [${roomCode}]: Cập nhật — ${existingRoomMatch.reason}`,
+        );
+        updates.push({
+          row,
+          recordId: existingRoomMatch.recordId,
+          fields: recordFields,
+        });
       } else {
         creates.push({ row, fields: recordFields });
       }
@@ -1445,12 +1497,19 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
         if (!sourceRow) continue;
 
         if (primary && !row.errors.length) {
+          const parentMatch = this.findParentExistingMatch(
+            previewSheet.name as 'Building Infor' | 'Host Infor',
+            sourceRow.values,
+            primary,
+            references,
+          );
           const code = String(this.valueForField(row.values, primary) ?? '').trim();
-          const map = previewSheet.name === 'Building Infor'
-            ? references.building
-            : references.host;
-          const action = map.has(this.normalizeKey(code)) ? 'sẽ cập nhật' : 'sẽ tạo mới';
-          row.systemActions.push(`${primary.field_name} "${code}" ${action} trước khi đồng bộ phòng.`);
+          row.syncAction = parentMatch ? 'update' : 'create';
+          row.systemActions.push(
+            parentMatch
+              ? `🔄 Cập nhật: ${parentMatch.reason}`
+              : `🆕 Tạo mới: ${primary.field_name} "${code}" chưa tồn tại trên Lark.`,
+          );
         }
 
         if (previewSheet.name !== 'ROOM INFOR') continue;
@@ -1468,16 +1527,16 @@ syncButton.onclick=async()=>{syncButton.disabled=true;previewButton.disabled=tru
             );
           }
         }
-        const existingRoomId = this.findRoomExistingRecordId(
+        const existingRoomMatch = this.findRoomExistingMatch(
           sourceRow.values,
           fields,
           references,
         );
-        row.syncAction = existingRoomId ? 'update' : 'create';
+        row.syncAction = existingRoomMatch ? 'update' : 'create';
         row.systemActions.push(
-          existingRoomId
-            ? `Upsert: sẽ CẬP NHẬT bản ghi hiện có (${existingRoomId}).`
-            : 'Upsert: sẽ TẠO MỚI trên Lark Base.',
+          existingRoomMatch
+            ? `🔄 Cập nhật: ${existingRoomMatch.reason}`
+            : '🆕 Tạo mới trên Lark Base.',
         );
 
         const roomCode = this.extractRoomCode(sourceRow.values);
