@@ -81,7 +81,7 @@ export class ExporterService {
         const hid =
           rawUrl.match(/\/users\/(?:show|profile)\/(\d+)/i)?.[1] ||
           (/^\d+$/.test(String(row.host_id || '').trim()) ? String(row.host_id).trim() : '');
-        return hid ? `https://www.airbnb.com/users/profile/${hid}` : rawUrl;
+        return hid ? `https://www.airbnb.com/users/show/${hid}` : rawUrl;
       })(),
       pdp_scraped: pdpScraped,
     };

@@ -239,7 +239,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
                 ? parsedRoom.hostId.trim()
                 : '');
             if (idMatch) {
-              parsedRoom.hostAirbnbLink = `https://www.airbnb.com/users/profile/${idMatch}`;
+              parsedRoom.hostAirbnbLink = `https://www.airbnb.com/users/show/${idMatch}`;
             }
           }
           out.set(String(row.listing_id), {

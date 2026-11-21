@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { exec } from 'child_process';
 import * as fs from 'fs';
 import { Browser, BrowserContext, chromium, Page, Response } from 'playwright';
 import { v4 as uuidv4 } from 'uuid';
@@ -111,14 +110,6 @@ export class DeepLinkExtractorService {
       await this.keptBrowser.close().catch(() => {});
       this.keptBrowser = null;
     }
-  }
-
-  private forceWindowsChromeToFront() {
-    if (process.platform !== 'win32') return;
-    exec(
-      `powershell -NoProfile -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class Win32 { [DllImport(\\"user32.dll\\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\\"user32.dll\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); }'; Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.MainWindowTitle -like '*Airbnb*' -or $_.MainWindowTitle -like '*Chrome for Testing*' -or $_.ProcessName -eq 'chrome') } | ForEach-Object { [Win32]::ShowWindow($_.MainWindowHandle, 9); [Win32]::SetForegroundWindow($_.MainWindowHandle) }"`,
-      () => {},
-    );
   }
 
   clearCache() {
@@ -648,27 +639,9 @@ export class DeepLinkExtractorService {
     >();
 
     let page = await context.newPage();
-    try {
-      const cdp = await page.context().newCDPSession(page);
-      const { windowId } = await cdp.send('Browser.getWindowForTarget');
-      await cdp.send('Browser.setWindowBounds', {
-        windowId,
-        bounds: {
-          left: 60,
-          top: 40,
-          width: 1360,
-          height: 820,
-          windowState: 'normal',
-        },
-      });
-    } catch {
-      // Ignore if CDP window bounds unsupported
-    }
-    await page.bringToFront().catch(() => {});
-    this.forceWindowsChromeToFront();
     this.pushLog(
       job,
-      `[Browser Tab 2] Đã kích hoạt nổi cửa sổ Chrome for Testing: ${execPath}`,
+      `[Browser Tab 2] Đã mở cửa sổ Chrome for Testing (1280x780, không giật focus): ${execPath}`,
       'success',
     );
     let myGen = contextGeneration;
@@ -719,10 +692,64 @@ export class DeepLinkExtractorService {
       };
 
       page.on('response', onSearchResp);
-      await page.goto(parsed.originalUrl, { timeout: 60000, waitUntil: 'commit' });
-      await page.bringToFront().catch(() => {});
-      this.forceWindowsChromeToFront();
+
+      let cleanSearchUrl = parsed.originalUrl;
+      try {
+        const searchUrlObj = new URL(parsed.originalUrl);
+        [
+          'ref_fsid',
+          'ref_search_session_id',
+          'search_session_id',
+          'federated_search_session_id',
+          'cursor',
+        ].forEach((param) => searchUrlObj.searchParams.delete(param));
+        cleanSearchUrl = searchUrlObj.toString();
+      } catch {
+        cleanSearchUrl = parsed.originalUrl;
+      }
+
+      this.pushLog(job, `[Bước 1] Đang mở URL tìm kiếm: ${cleanSearchUrl}`, 'info');
+      await page.goto(cleanSearchUrl, { timeout: 60000, waitUntil: 'commit' });
       await randomDelay(3000, 4500);
+
+      if (page.url().includes('/404')) {
+        this.pushLog(
+          job,
+          `[Cảnh báo 404] URL tìm kiếm bị chuyển hướng sang ${page.url()} — Đang thử lại với URL bản đồ rút gọn trên domain gốc...`,
+          'warn',
+        );
+        try {
+          const origObj = new URL(parsed.originalUrl);
+          const fallbackParams = new URLSearchParams();
+          [
+            'ne_lat',
+            'sw_lat',
+            'ne_lng',
+            'sw_lng',
+            'zoom',
+            'zoom_level',
+            'checkin',
+            'checkout',
+            'adults',
+          ].forEach((k) => {
+            const val = origObj.searchParams.get(k);
+            if (val) fallbackParams.set(k, val);
+          });
+          for (const rt of origObj.searchParams.getAll('room_types[]')) {
+            fallbackParams.append('room_types[]', rt);
+          }
+          for (const pt of origObj.searchParams.getAll('l2_property_type_ids[]')) {
+            fallbackParams.append('l2_property_type_ids[]', pt);
+          }
+          fallbackParams.set('search_by_map', 'true');
+          const fallbackSearchUrl = `${origObj.origin}${origObj.pathname}?${fallbackParams.toString()}`;
+          this.pushLog(job, `[Bước 1 Fallback] Đang mở URL bản đồ rút gọn: ${fallbackSearchUrl}`, 'info');
+          await page.goto(fallbackSearchUrl, { timeout: 60000, waitUntil: 'commit' });
+          await randomDelay(3000, 4500);
+        } catch {
+          // Ignore
+        }
+      }
 
       for (let p = 1; p <= 15; p++) {
         if (job.abortController.signal.aborted) break;
@@ -908,13 +935,12 @@ export class DeepLinkExtractorService {
               `Bước 2/3: Đang đọc sâu căn #${cand.listingId} (${i + 1}/${candidates.length})...`,
             );
 
-            const pdpBase = parsed.platformLocation.origin.includes('airbnb.cn')
-              ? 'https://www.airbnb.com'
-              : parsed.platformLocation.origin;
-            const roomUrl =
+            const sourceOrigin = parsed.platformLocation.origin || 'https://www.airbnb.com';
+            const roomQuery =
               parsed.dates.checkIn && parsed.dates.checkOut
-                ? `${pdpBase}/rooms/${cand.listingId}?check_in=${parsed.dates.checkIn}&check_out=${parsed.dates.checkOut}&locale=en`
-                : `${pdpBase}/rooms/${cand.listingId}?locale=en`;
+                ? `?check_in=${parsed.dates.checkIn}&check_out=${parsed.dates.checkOut}&locale=en`
+                : `?locale=en`;
+            let roomUrl = `${sourceOrigin}/rooms/${cand.listingId}${roomQuery}`;
 
             const pdpJsonRoots: unknown[] = [];
             let bookItData: any = null;
@@ -952,11 +978,30 @@ export class DeepLinkExtractorService {
 
             page.on('response', onPdpResp);
             try {
-              const nav = await page.goto(roomUrl, { timeout: 60000, waitUntil: 'commit' });
-              await page.bringToFront().catch(() => {});
-              this.forceWindowsChromeToFront();
+              this.pushLog(job, `[Bước 2] Đang mở URL phòng: ${roomUrl}`, 'info');
+              let nav = await page.goto(roomUrl, { timeout: 60000, waitUntil: 'commit' });
               await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
-              await randomDelay(4000, 5500);
+              await randomDelay(3500, 5000);
+
+              if (page.url().includes('/404') && sourceOrigin !== 'https://www.airbnb.com') {
+                const fallbackComUrl = `https://www.airbnb.com/rooms/${cand.listingId}${roomQuery}`;
+                this.pushLog(
+                  job,
+                  `[Cảnh báo 404] Domain gốc chuyển hướng sang /404 — Thử fallback sang: ${fallbackComUrl}`,
+                  'warn',
+                );
+                roomUrl = fallbackComUrl;
+                nav = await page.goto(fallbackComUrl, { timeout: 60000, waitUntil: 'commit' });
+                await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
+                await randomDelay(3500, 5000);
+              }
+
+              if (page.url().includes('/404')) {
+                this.pushLog(job, `[Cảnh báo 404] Bỏ qua URL lỗi: ${page.url()}`, 'warn');
+                excludedOutsideIds.add(cand.listingId);
+                break;
+              }
+
               if (pdpBlock) throw pdpBlock;
               const blk = await this.isBlockedOr503(page, nav);
               if (blk.blocked) throw new Blocked503Error(blk.status, blk.reason);
@@ -1183,48 +1228,41 @@ export class DeepLinkExtractorService {
                 structured.childPolicy || rulesParsed.childPolicy || '',
               );
 
-              // Đọc tên Host chuẩn từ JSON hoặc truy cập thẳng /users/show/{hostId} (cấm "Airbnb Host")
-              const sourceOrigin = parsed.platformLocation.origin || 'https://www.airbnb.com';
-              const hostId = structured.hostId || baseRecord?.host_id || domHostLinkInfo.hostId || '';
+              // Đọc tên Host chuẩn từ JSON; chỉ mở fallback /users/profile/{hostId} khi hostName trống/lỗi VÀ hostId là số hợp lệ
+              const rawHostId = structured.hostId || baseRecord?.host_id || domHostLinkInfo.hostId || '';
+              const isValidNumericHostId =
+                /^\d{5,20}$/.test(rawHostId) && rawHostId !== cand.listingId;
+              const hostId = isValidNumericHostId ? rawHostId : '';
               let hostName = isValidHostName(structured.hostName)
                 ? structured.hostName
                 : isValidHostName(baseRecord?.host_name || '')
                   ? normalizeUnicodeSpaces(baseRecord?.host_name || '')
                   : '';
-              let hostTotalListings = 1;
+              const hostTotalListings = 1;
 
-              if (hostId && !hostName) {
-                const hostProfileFallbackUrl = `https://www.airbnb.com/users/profile/${hostId}?locale=en`;
+              if (!isValidHostName(hostName) && isValidNumericHostId) {
+                const hostProfileFallbackUrl = `https://www.airbnb.com/users/show/${hostId}?locale=en`;
+                this.pushLog(
+                  job,
+                  `[Host Fallback] Đang mở hồ sơ chủ nhà do thiếu tên Host: ${hostProfileFallbackUrl}`,
+                  'info',
+                );
                 await page.goto(hostProfileFallbackUrl, { timeout: 45000, waitUntil: 'commit' }).catch(() => null);
-                await randomDelay(3000, 4000);
-                const h1Host = await page
-                  .locator('h1')
-                  .first()
-                  .innerText({ timeout: 3000 })
-                  .catch(() => '');
-                const cleanHostH1 = normalizeUnicodeSpaces(h1Host)
-                  .replace(/^(Hi,\s*I['’]m|I['’]m|About)\s+/i, '')
-                  .trim();
-                if (isValidHostName(cleanHostH1)) {
-                  hostName = cleanHostH1;
-                }
-              }
-              if (hostId) {
-                const hostShowUrl = `https://www.airbnb.com/users/profile/${hostId}?locale=en`;
-                const hostRoomIds = await this.hostParser
-                  .collectHostRoomIds(page, hostShowUrl)
-                  .catch(() => []);
-                if (hostRoomIds.length > 0) hostTotalListings = hostRoomIds.length;
-                if (!hostName) {
-                  const h1Show = await page
+                await randomDelay(2500, 3500);
+                if (page.url().includes('/404')) {
+                  this.pushLog(job, `[Cảnh báo 404] Bỏ qua URL lỗi: ${page.url()}`, 'warn');
+                } else {
+                  const h1Host = await page
                     .locator('h1')
                     .first()
-                    .innerText({ timeout: 2000 })
+                    .innerText({ timeout: 3000 })
                     .catch(() => '');
-                  const cleanShow = normalizeUnicodeSpaces(h1Show)
+                  const cleanHostH1 = normalizeUnicodeSpaces(h1Host)
                     .replace(/^(Hi,\s*I['’]m|I['’]m|About)\s+/i, '')
                     .trim();
-                  if (isValidHostName(cleanShow)) hostName = cleanShow;
+                  if (isValidHostName(cleanHostH1)) {
+                    hostName = cleanHostH1;
+                  }
                 }
               }
 
@@ -1301,7 +1339,9 @@ export class DeepLinkExtractorService {
                 localPhotoDir: '',
                 hostId,
                 hostName: hostName || `Host-${hostId || cand.listingId}`,
-                hostAirbnbLink: normalizeHostProfileUrl(domHostLinkInfo.href, sourceOrigin, hostId),
+                hostAirbnbLink: isValidNumericHostId
+                  ? `https://www.airbnb.com/users/show/${hostId}`
+                  : '',
                 hostTotalListings,
               };
 
@@ -1372,7 +1412,6 @@ export class DeepLinkExtractorService {
         this.keptBrowser = browser;
         this.keptContext = context;
         await page.goto(parsed.originalUrl, { timeout: 30000, waitUntil: 'commit' }).catch(() => {});
-        await page.bringToFront().catch(() => {});
         this.pushLog(
           job,
           '[Chrome Kiểm Tra Trực Tiếp] Giữ nguyên cửa sổ Chrome for Testing mở để bạn đối chiếu trực tiếp!',

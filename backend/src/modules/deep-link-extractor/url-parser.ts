@@ -183,7 +183,7 @@ const TRACKING_QUERY_PARAMS = [
 
 /**
  * Chuẩn hóa toàn bộ link hồ sơ chủ nhà sang định dạng quốc tế duy nhất:
- * https://www.airbnb.com/users/profile/{hostId}
+ * https://www.airbnb.com/users/show/{hostId}
  */
 export function normalizeHostProfileUrl(
   rawUrlOrId?: string | null,
@@ -194,12 +194,12 @@ export function normalizeHostProfileUrl(
   for (const cand of candidates) {
     const str = String(cand || '').trim();
     if (!str) continue;
-    const urlMatch = str.match(/\/users\/(?:show|profile)\/(\d+)/i);
+    const urlMatch = str.match(/\/users\/(?:show|profile)\/(\d{5,20})/i);
     if (urlMatch && urlMatch[1]) {
-      return `https://www.airbnb.com/users/profile/${urlMatch[1]}`;
+      return `https://www.airbnb.com/users/show/${urlMatch[1]}`;
     }
-    if (/^\d+$/.test(str)) {
-      return `https://www.airbnb.com/users/profile/${str}`;
+    if (/^\d{5,20}$/.test(str)) {
+      return `https://www.airbnb.com/users/show/${str}`;
     }
   }
   return '';
